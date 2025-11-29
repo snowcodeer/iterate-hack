@@ -6,7 +6,14 @@ UniWrap reads any codebase and automatically generates a family of RL environmen
 
 ## Overview
 
-Today, RL environments are handcrafted. UniWrap is an agent that reads any codebase and automatically turns it into a family of RL environments (with well-defined actions, observations, and rewards), so that any RL method can be tested on that software without human environment design.
+Today, RL environments are handcrafted. UniWrap is an agent that reads any codebase (or web game URL) and automatically generates a fully-integrated RL environment wrapper with real game integration. No simulated mode - it connects directly to the actual game using standard industry patterns (browser automation for web games, direct integration for native games).
+
+**Key Features:**
+- **Automatic Game Detection**: Detects web games, desktop games, APIs
+- **Real Integration**: Uses Playwright for web games, direct imports for Python games
+- **Single Wrapper**: Generates one optimized environment (not multiple variants)
+- **Evaluation Agent**: Automatically assesses wrapper quality
+- **URL Support**: Works with GitHub repos or direct web game URLs
 
 ## Installation
 
@@ -40,27 +47,36 @@ python -m uniwrap <repo_path> [options]
 
 ### Options
 
-- `repo_path`: Path to the target codebase (required)
+- `repo_path`: Path to codebase, GitHub repo URL, or web game URL (required)
 - `--output` / `-o`: Output directory for environment files (default: `environments/`)
-- `--variants` / `-n`: Number of environment variants to generate in parallel (default: 3)
 - `--format`: Output format - `code` (Python files), `json` (specs), or `both` (default: `code`)
+- `--evaluate`: Run evaluation agent to assess wrapper quality
 - `--model`: Claude model to use (default: claude-sonnet-4-5-20250929)
 - `--api-key`: Anthropic API key (default: uses `ANTHROPIC_API_KEY` env var)
 
-### Example
+### Examples
 
+**Local Repository:**
 ```bash
-python -m uniwrap /path/to/codebase --variants 3 --output environments
+python -m uniwrap /path/to/codebase --evaluate
+```
+
+**GitHub Repository:**
+```bash
+python -m uniwrap https://github.com/user/repo --evaluate
+```
+
+**Web Game URL:**
+```bash
+python -m uniwrap http://localhost:3000 --evaluate
 ```
 
 This will create:
 ```
 environments/
-└── codebase/
+└── repo_name/
     ├── __init__.py
-    ├── env_variant_1.py
-    ├── env_variant_2.py
-    └── env_variant_3.py
+    └── generated_env.py  # Single optimized wrapper
 ```
 
 ## Output
@@ -122,11 +138,15 @@ uniwrap/
 
 ## How It Works
 
-1. **Repository Analysis**: UniWrap analyzes the codebase structure, README, test files, and key source files
-2. **Parallel LLM Generation**: 3 Claude agents run in parallel, each generating one unique RL environment variant with different reward functions, action spaces, and observation strategies
-3. **Code Generation**: Specifications are converted into executable Python Gymnasium environment classes
-4. **Validation**: Generated code is validated for proper structure
-5. **Output**: Environment files are organized in repository-specific subdirectories
+1. **Game Type Detection**: Automatically detects if it's a web game, desktop game, or API
+2. **Repository Analysis**: Analyzes codebase structure, README, and game mechanics
+3. **Environment Design**: Claude generates a single optimized RL environment specification
+4. **Real Integration**: Code generator creates Gymnasium wrapper with actual game controller integration:
+   - **Web Games**: Uses Playwright for browser automation
+   - **Python Games**: Direct import and method calls
+   - **APIs**: HTTP client integration
+5. **Evaluation**: Optional evaluation agent assesses wrapper quality and identifies issues
+6. **Output**: Single optimized environment file ready to use
 
 ## Testing
 
