@@ -1,0 +1,36 @@
+{
+  "env_name": "toast_quality_optimization_v1",
+  "timestamp": "2025-11-29T18:47:30.448878",
+  "episodes": [
+    {
+      "steps": 3,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 0.00047779083251953125
+    },
+    {
+      "steps": 3,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 1.4066696166992188e-05
+    },
+    {
+      "steps": 3,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 1.0013580322265625e-05
+    }
+  ]
+}

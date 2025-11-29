@@ -1,0 +1,79 @@
+{
+  "env_name": "bread2d_toasting_optimization",
+  "num_episodes": 5,
+  "timestamp": "2025-11-29T18:44:10.466579",
+  "statistics": {
+    "total_reward": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "steps": {
+      "mean": 50.0,
+      "std": 0.0,
+      "min": 50,
+      "max": 50
+    },
+    "duration": {
+      "mean": 0.00034165382385253906,
+      "total": 0.0017082691192626953
+    },
+    "termination": {
+      "terminated": 0,
+      "truncated": 5
+    }
+  },
+  "episodes": [
+    {
+      "steps": 50,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 0.001062154769897461
+    },
+    {
+      "steps": 50,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 0.00029277801513671875
+    },
+    {
+      "steps": 50,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 0.00011801719665527344
+    },
+    {
+      "steps": 50,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 0.00011920928955078125
+    },
+    {
+      "steps": 50,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 0.00011610984802246094
+    }
+  ]
+}

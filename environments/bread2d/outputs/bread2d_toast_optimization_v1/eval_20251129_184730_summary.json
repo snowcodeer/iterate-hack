@@ -1,0 +1,59 @@
+{
+  "env_name": "bread2d_toast_optimization_v1",
+  "num_episodes": 3,
+  "timestamp": "2025-11-29T18:47:30.449720",
+  "statistics": {
+    "total_reward": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "steps": {
+      "mean": 3.0,
+      "std": 0.0,
+      "min": 3,
+      "max": 3
+    },
+    "duration": {
+      "mean": 2.3603439331054688e-05,
+      "total": 7.081031799316406e-05
+    },
+    "termination": {
+      "terminated": 0,
+      "truncated": 3
+    }
+  },
+  "episodes": [
+    {
+      "steps": 3,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 4.982948303222656e-05
+    },
+    {
+      "steps": 3,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 1.0967254638671875e-05
+    },
+    {
+      "steps": 3,
+      "total_reward": 0.0,
+      "mean_reward": 0.0,
+      "max_reward": 0.0,
+      "min_reward": 0.0,
+      "terminated": false,
+      "truncated": true,
+      "duration": 1.0013580322265625e-05
+    }
+  ]
+}

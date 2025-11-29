@@ -1,0 +1,25 @@
+# Environment variables
+.env
+
+# Python
+*.pyc
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output files (but allow test outputs)
+env_specs.json
+test_output.json
+*.log

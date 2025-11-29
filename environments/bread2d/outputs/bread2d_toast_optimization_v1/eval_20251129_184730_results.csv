@@ -1,0 +1,4 @@
+episode,steps,total_reward,mean_reward,terminated,truncated
+0,3,0.0000,0.0000,False,True
+1,3,0.0000,0.0000,False,True
+2,3,0.0000,0.0000,False,True
