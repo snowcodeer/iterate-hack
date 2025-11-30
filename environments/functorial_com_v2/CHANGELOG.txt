@@ -1,27 +1,16 @@
-StarDodgeEnv v2 - Improved by AI Supervisor
-==========================================
+functorial_com_v2 - Improved by AI Supervisor
+==================================================
 
-Based on: functorial_com/stardodgeenv.py
+Based on: functorial_com
 
-CHANGES MADE (v2.1):
-- [SCORE] Removed broken DOM score detection - canvas games render score on canvas
-- [SCORE] Use survival_steps as score proxy (survival IS the objective)
-- [REWARD] Added frame difference tracking to detect active gameplay
-- [REWARD] Added milestone bonuses at steps 50, 100, 200, and every 100 after
-- [REWARD] Added small bonus for active gameplay (frame changing)
-- [REWARD] Added bonus when action causes visible frame change
-- [FIX] Track last_action and action_changed_frame for better reward shaping
-
-PREVIOUS CHANGES (v2.0):
-- [GAME_OVER] Added 30-step grace period at start to prevent false positives during loading
-- [GAME_OVER] Increased identical frame threshold from 8 to 30 (~1 second) for more reliable detection
-- [GAME_OVER] Removed unreliable red pixel color detection that caused false positives
-- [GAME_OVER] Added text/DOM-based game over detection (checks for 'game over', 'try again', etc.)
-- [REWARD] Added base survival reward (+0.01 per step) to encourage staying alive
-- [REWARD] Death penalty (-1.0) creates clear distinction between success and failure
-- [FIX] Improved frame comparison using mean absolute difference instead of hash
-
-GAME INFO:
-- Star Dodge Clone: Hold Space to change direction, avoid obstacles
-- Control: Space bar toggles movement direction
-- Objective: Survive as long as possible
+CHANGES MADE:
+- [GAME_OVER] Added 30-step grace period to prevent premature termination during game startup/loading
+- [GAME_OVER] Increased identical frame threshold from 5 to 30 frames to avoid false positives from UI pauses
+- [GAME_OVER] Removed unreliable red pixel color detection that was causing false game-over triggers
+- [GAME_OVER] Made frame difference threshold more conservative (0.5 -> 1.0) to better handle UI animations
+- [REWARD] Changed reward structure to prioritize survival time as primary signal (0.01 per step)
+- [REWARD] Increased score reward multiplier from 10 to 100 to make score changes more impactful
+- [REWARD] Reduced death penalty from -1.0 to -10.0 to strongly discourage early termination
+- [REWARD] Added score-based survival bonus to reward staying alive with higher scores
+- [FIX] Improved game over text detection to be more comprehensive and reliable
+- [STABILITY] Added better error handling in game over detection to prevent crashes

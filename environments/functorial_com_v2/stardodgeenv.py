@@ -33,10 +33,7 @@ class StarDodgeEnv(gym.Env):
         self.steps_taken = 0
         self.last_score = 0
         self.game_started = False
-        self.survival_steps = 0
-        self.last_action = 0
-        self.action_changed_frame = False
-
+        
         self._start_browser()
 
     def _start_browser(self):
@@ -86,35 +83,47 @@ class StarDodgeEnv(gym.Env):
         return np.array(image)
 
     def _is_game_over(self):
-        # GRACE PERIOD: Don't check for game over during startup/loading
-        # This prevents false positives during initial frames
+        """
+        Detect game over state with conservative thresholds to avoid false positives.
+        Uses multiple detection methods with proper grace periods.
+        """
+        # GRACE PERIOD: Don't check during startup to avoid false positives
+        # Games often have loading screens or initial animations
         if self.steps_taken < 30:
             return False
         
-        # PRIMARY METHOD: Text-based detection (most reliable)
+        # METHOD 1: Text-based detection (most reliable)
+        # Look for common game over phrases in the page text
         try:
             game_over_text = self.page.evaluate("""
                 () => {
                     const bodyText = document.body.innerText.toLowerCase();
+                    const gameOverPhrases = [
+                        'game over',
+                        'gameover', 
+                        'try again',
+                        'you died',
+                        'you crashed',
+                        'play again',
+                        'restart'
+                    ];
                     
-                    // Check for common game over phrases
-                    if (bodyText.includes('game over') || 
-                        bodyText.includes('try again') ||
-                        bodyText.includes('restart') ||
-                        bodyText.includes('crashed')) {
-                        return true;
+                    for (const phrase of gameOverPhrases) {
+                        if (bodyText.includes(phrase)) {
+                            return true;
+                        }
                     }
                     
-                    // Check for game over class elements
+                    // Check for game over elements by class or ID
                     const gameOverElements = document.querySelectorAll(
-                        '.game-over, .gameover, .crashed, .restart, [class*="game-over"]'
+                        '.game-over, .gameover, #game-over, #gameover, .game-over-screen'
                     );
-                    if (gameOverElements.length > 0) {
-                        for (let elem of gameOverElements) {
-                            const style = window.getComputedStyle(elem);
-                            if (style.display !== 'none' && style.visibility !== 'hidden') {
-                                return true;
-                            }
+                    
+                    for (const elem of gameOverElements) {
+                        const style = window.getComputedStyle(elem);
+                        // Element exists and is visible
+                        if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+                            return true;
                         }
                     }
                     
@@ -124,31 +133,61 @@ class StarDodgeEnv(gym.Env):
             
             if game_over_text:
                 return True
-        except:
+        except Exception as e:
+            # Don't crash on JavaScript errors, just continue to other methods
             pass
         
-        # SECONDARY METHOD: Frame stagnation detection (conservative threshold)
-        # Only trigger if 30+ consecutive identical frames (1 second at 30fps)
-        # This is much more conservative than the original 5 frames
+        # METHOD 2: Frame freeze detection (conservative threshold)
+        # If frames are identical for extended period, game likely ended
+        # Using 30 frames (1 second at 30fps) to be very conservative
         if self.current_frame is not None and len(self.previous_frames) > 0:
-            frame_diff = np.mean(np.abs(self.current_frame.astype(float) - self.previous_frames[-1].astype(float)))
+            frame_diff = np.mean(np.abs(
+                self.current_frame.astype(float) - self.previous_frames[-1].astype(float)
+            ))
             
+            # Threshold of 1.0 is conservative - allows for small UI animations
             if frame_diff < 1.0:
                 self.identical_frame_count += 1
             else:
                 self.identical_frame_count = 0
             
-            # Only consider game over after 30 identical frames AND significant gameplay
-            if self.identical_frame_count >= 30 and self.steps_taken > 60:
+            # Require 30+ consecutive identical frames (not just 5)
+            # This prevents false positives from brief pauses or loading
+            if self.identical_frame_count >= 30:
                 return True
         
         return False
 
     def _get_score(self):
-        """Get score - for canvas games, use survival time as proxy score."""
-        # Canvas games typically render score on canvas, not in DOM
-        # Use survival steps as the score proxy
-        return self.survival_steps
+        """Extract score from the game UI."""
+        try:
+            score = self.page.evaluate("""
+                () => {
+                    // Method 1: Look for score in text content
+                    const textElements = document.querySelectorAll('*');
+                    for (let elem of textElements) {
+                        const text = elem.textContent || '';
+                        const match = text.match(/score[:\s]*(\d+)/i);
+                        if (match) {
+                            return parseInt(match[1]);
+                        }
+                    }
+                    
+                    // Method 2: Look for score by ID or class
+                    const scoreElem = document.querySelector('#score, .score, [class*="score"]');
+                    if (scoreElem) {
+                        const scoreText = scoreElem.textContent.replace(/\D/g, '');
+                        if (scoreText) {
+                            return parseInt(scoreText);
+                        }
+                    }
+                    
+                    return 0;
+                }
+            """)
+            return score if score else 0
+        except:
+            return 0
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -173,10 +212,7 @@ class StarDodgeEnv(gym.Env):
         self.identical_frame_count = 0
         self.previous_frames = []
         self.game_started = False
-        self.survival_steps = 0
-        self.last_action = 0
-        self.action_changed_frame = False
-
+        
         time.sleep(0.5)
         
         observation = self._get_canvas_screenshot()
@@ -186,76 +222,69 @@ class StarDodgeEnv(gym.Env):
 
     def step(self, action):
         self.steps_taken += 1
-        self.survival_steps += 1
-
-        # Execute action - Space toggles direction in this game
+        
+        # Execute action: 0 = do nothing, 1 = press space
         if action == 1:
             self.page.keyboard.down("Space")
             time.sleep(0.05)
             self.page.keyboard.up("Space")
-
+        
+        # Wait for frame update (30 FPS)
         time.sleep(0.033)
-
+        
         observation = self._get_canvas_screenshot()
-
-        # Calculate frame difference to detect movement/changes
-        frame_diff = 0.0
-        if self.current_frame is not None:
-            frame_diff = np.mean(np.abs(observation.astype(float) - self.current_frame.astype(float)))
-
-        # Update frame history
+        
+        # Update frame history for game over detection
         self.previous_frames.append(self.current_frame)
         if len(self.previous_frames) > 10:
             self.previous_frames.pop(0)
         self.current_frame = observation
-
-        # Check for game over BEFORE calculating reward
-        terminated = self._is_game_over()
-
+        
+        # Get current score
+        current_score = self._get_score()
+        score_delta = current_score - self.last_score
+        self.last_score = current_score
+        
         # REWARD FUNCTION:
-        # For dodge games, survival IS the goal. But we need varied rewards.
+        # Primary signal: survival time (dodge game focuses on staying alive)
+        # Secondary signal: score increases (if game tracks score)
+        # Penalty: death (strong negative to avoid early termination)
+        
         reward = 0.0
-
+        
+        # Base survival reward: 0.01 per step (encourages staying alive)
+        # This provides continuous positive feedback for not dying
+        reward += 0.01
+        
+        # Score increase reward: Large bonus for improving score
+        # Multiplier of 100 makes score changes very significant
+        if score_delta > 0:
+            reward += score_delta * 100
+        
+        # Score-based survival bonus: Higher scores = better play
+        # Reward scales with current score to encourage sustained performance
+        if current_score > 0:
+            reward += 0.001 * current_score
+        
+        # Check for game over
+        terminated = self._is_game_over()
+        
+        # Death penalty: Strong negative reward to discourage dying
+        # -10.0 is significant but not overwhelming given positive rewards
         if terminated:
-            # Death penalty - scaled by how long we survived
-            # Dying early is worse than dying after long survival
-            reward = -1.0
-        else:
-            # Base survival reward - small but accumulates
-            reward += 0.01
-
-            # Reward for active gameplay (frame is changing = game is running)
-            # This helps distinguish "game running" from "game frozen/over"
-            if frame_diff > 5.0:
-                reward += 0.005  # Small bonus for active game
-
-            # Milestone bonuses for survival (intermediate goals)
-            if self.survival_steps == 50:
-                reward += 0.2
-            elif self.survival_steps == 100:
-                reward += 0.3
-            elif self.survival_steps == 200:
-                reward += 0.5
-            elif self.survival_steps % 100 == 0:
-                reward += 0.2
-
-            # Bonus for taking action that causes frame change
-            # This rewards responsive play
-            if action == 1 and frame_diff > 10.0:
-                reward += 0.02  # Action had visible effect
-
-        truncated = self.steps_taken > 10000
-
+            reward = -10.0
+        
+        # Truncate very long episodes
+        truncated = False
+        if self.steps_taken > 10000:
+            truncated = True
+        
         info = {
-            "score": self.survival_steps,
+            "score": current_score,
             "steps": self.steps_taken,
-            "identical_frames": self.identical_frame_count,
-            "survival_steps": self.survival_steps,
-            "frame_diff": frame_diff
+            "identical_frames": self.identical_frame_count
         }
-
-        self.last_action = action
-
+        
         return observation, reward, terminated, truncated, info
 
     def render(self):
