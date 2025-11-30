@@ -90,11 +90,17 @@ class UniWrapAPI(BaseHTTPRequestHandler):
             return
 
         params = eval_stream_params[job_id]
-        episodes = params['episodes']
+        episodes = params.get('episodes', 10)
 
-        # Check if this is a web game evaluation
+        # Check request type
         if params.get('type') == 'web':
             self._handle_web_eval_stream(job_id, params)
+            return
+        elif params.get('type') == 'train':
+            self._handle_train_stream(job_id, params)
+            return
+        elif params.get('type') == 'trained_eval':
+            self._handle_trained_eval_stream(job_id, params)
             return
 
         env_name = params['env_name']
@@ -112,6 +118,20 @@ class UniWrapAPI(BaseHTTPRequestHandler):
 
             # Import the environment fresh
             env_module = importlib.import_module(f'environments.{env_name}')
+
+            # Check if this is a web-based environment (uses playwright)
+            env_path = Path(f'environments/{env_name}')
+            is_web_env = False
+            for py_file in env_path.glob('*.py'):
+                content = py_file.read_text()
+                if 'playwright' in content.lower() or 'sync_playwright' in content:
+                    is_web_env = True
+                    break
+
+            if is_web_env:
+                # Run web-based environment evaluation in a separate thread
+                self._handle_playwright_env_stream(job_id, params, env_module)
+                return
 
             env_class_name = env_module.__all__[0] if hasattr(env_module, '__all__') else None
             if not env_class_name:
@@ -370,16 +390,424 @@ class UniWrapAPI(BaseHTTPRequestHandler):
         import io
         import base64
 
-        # Handle grayscale (H, W, 1) or RGB (H, W, 3)
-        if obs.shape[-1] == 1:
+        # Handle different observation shapes
+        if len(obs.shape) == 2:
+            # Grayscale without channel dim (H, W)
+            img = Image.fromarray(obs, mode='L')
+        elif obs.shape[-1] == 1:
+            # Grayscale with channel dim (H, W, 1)
             img = Image.fromarray(obs.squeeze(), mode='L')
         else:
+            # RGB (H, W, 3)
             img = Image.fromarray(obs, mode='RGB')
 
         # Encode as JPEG
         buffer = io.BytesIO()
         img.save(buffer, format='JPEG', quality=70)
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+    def _handle_playwright_env_stream(self, job_id: str, params: dict, env_module):
+        """Handle evaluation of Playwright-based environments in a separate thread."""
+        import concurrent.futures
+        from queue import Queue
+        import base64
+
+        env_name = params['env_name']
+        episodes = params.get('episodes', 10)
+
+        print(f"[SSE] Running Playwright environment {env_name} in thread")
+
+        # Find environment class
+        env_class_name = env_module.__all__[0] if hasattr(env_module, '__all__') else None
+        if not env_class_name:
+            for name in dir(env_module):
+                if name.endswith('Env') and not name.startswith('_'):
+                    env_class_name = name
+                    break
+
+        env_class = getattr(env_module, env_class_name)
+
+        # Queue to receive results from thread
+        result_queue = Queue()
+
+        def run_evaluation():
+            """Run the evaluation in a separate thread where Playwright sync API works."""
+            try:
+                env = env_class(render_mode=None)
+
+                # Get dimensions from observation space
+                obs_shape = env.observation_space.shape
+                game_width = obs_shape[1] if len(obs_shape) >= 2 else 84
+                game_height = obs_shape[0] if len(obs_shape) >= 2 else 84
+
+                result_queue.put({
+                    'type': 'config',
+                    'game_width': game_width,
+                    'game_height': game_height,
+                    'total_episodes': episodes,
+                    'is_web_game': True
+                })
+
+                all_results = []
+
+                for ep in range(episodes):
+                    obs, info = env.reset()
+                    episode_reward = 0
+                    episode_steps = 0
+                    max_steps = 500
+
+                    # Send episode start with screenshot
+                    result_queue.put({
+                        'type': 'episode_start',
+                        'episode': ep + 1,
+                        'obs': obs,
+                        'score': info.get('score', info.get('survival_time', 0))
+                    })
+
+                    while episode_steps < max_steps:
+                        action = env.action_space.sample()
+                        obs, reward, terminated, truncated, info = env.step(action)
+                        episode_reward += reward
+                        episode_steps += 1
+
+                        # Send frame update every few steps
+                        if episode_steps % 5 == 0 or terminated or truncated:
+                            result_queue.put({
+                                'type': 'frame',
+                                'episode': ep + 1,
+                                'step': episode_steps,
+                                'obs': obs,
+                                'score': info.get('score', info.get('survival_time', 0)),
+                                'reward': float(reward),
+                                'total_reward': float(episode_reward),
+                                'action': int(action),
+                                'terminated': terminated
+                            })
+
+                        if terminated or truncated:
+                            break
+
+                    score = info.get('score', info.get('survival_time', 0))
+                    all_results.append({
+                        'episode': ep + 1,
+                        'steps': episode_steps,
+                        'reward': round(float(episode_reward), 2),
+                        'score': round(float(score), 2) if isinstance(score, float) else score
+                    })
+
+                    result_queue.put({
+                        'type': 'episode_end',
+                        'episode': ep + 1,
+                        'steps': episode_steps,
+                        'reward': round(float(episode_reward), 2),
+                        'score': round(float(score), 2) if isinstance(score, float) else score
+                    })
+
+                env.close()
+
+                # Calculate final results
+                total_reward = sum(r['reward'] for r in all_results)
+                total_steps = sum(r['steps'] for r in all_results)
+                total_score = sum(r['score'] for r in all_results)
+                max_score = max(r['score'] for r in all_results) if all_results else 0
+
+                result_queue.put({
+                    'type': 'complete',
+                    'episodes': all_results,
+                    'avg_reward': round(total_reward / episodes, 2) if episodes > 0 else 0,
+                    'avg_steps': round(total_steps / episodes, 1) if episodes > 0 else 0,
+                    'avg_score': round(total_score / episodes, 2) if episodes > 0 else 0,
+                    'max_score': max_score
+                })
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                result_queue.put({'type': 'error', 'error': str(e)})
+
+        # Start evaluation in thread
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(run_evaluation)
+
+            # Stream results as they come in
+            while True:
+                try:
+                    msg = result_queue.get(timeout=60)
+
+                    # Convert obs to base64 if present
+                    if 'obs' in msg:
+                        msg['screenshot'] = self._obs_to_base64(msg['obs'])
+                        del msg['obs']
+
+                    data = json.dumps(msg)
+                    self.wfile.write(f'data: {data}\n\n'.encode())
+                    self.wfile.flush()
+
+                    if msg['type'] in ('complete', 'error'):
+                        break
+
+                except Exception as e:
+                    # Timeout or other error
+                    if future.done():
+                        break
+                    continue
+
+        # Cleanup
+        if job_id in eval_stream_params:
+            del eval_stream_params[job_id]
+
+    def _handle_train_stream(self, job_id: str, params: dict):
+        """Handle Server-Sent Events for RL training progress."""
+        env_name = params['env_name']
+        timesteps = params.get('timesteps', 10000)
+
+        print(f"[TRAIN] Starting training for {env_name} with {timesteps} timesteps")
+
+        try:
+            from uniwrap.rl_agent import RLAgent, get_model_path
+
+            # Import environment
+            module_name = f'environments.{env_name}'
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+            for key in list(sys.modules.keys()):
+                if key.startswith(f'environments.{env_name}'):
+                    del sys.modules[key]
+
+            env_module = importlib.import_module(f'environments.{env_name}')
+            env_class_name = env_module.__all__[0] if hasattr(env_module, '__all__') else None
+            if not env_class_name:
+                for name in dir(env_module):
+                    if name.endswith('Env') and not name.startswith('_'):
+                        env_class_name = name
+                        break
+            env_class = getattr(env_module, env_class_name)
+
+            # Create a test env to get dimensions
+            test_env = env_class(render_mode=None)
+            game_width = getattr(test_env, 'game_width', 720)
+            game_height = getattr(test_env, 'game_height', 480)
+            grid_size = getattr(test_env, 'grid_size', 10)
+            test_env.close()
+
+            # Send config first
+            config_data = json.dumps({
+                'type': 'config',
+                'game_width': game_width,
+                'game_height': game_height,
+                'grid_size': grid_size
+            })
+            self.wfile.write(f'data: {config_data}\n\n'.encode())
+            self.wfile.flush()
+
+            # Progress callback to stream updates
+            def progress_callback(data):
+                # Handle numpy arrays in obs
+                if 'obs' in data:
+                    obs = data['obs']
+                    if hasattr(obs, 'shape'):
+                        data['screenshot'] = self._obs_to_base64(obs)
+                    del data['obs']
+
+                msg = json.dumps(data)
+                try:
+                    self.wfile.write(f'data: {msg}\n\n'.encode())
+                    self.wfile.flush()
+                except:
+                    pass
+
+            # Train
+            agent = RLAgent(env_class)
+            save_path = get_model_path(env_name)
+
+            results = agent.train(
+                total_timesteps=timesteps,
+                progress_callback=progress_callback,
+                save_path=save_path
+            )
+
+            results['model_path'] = str(save_path)
+            agent.close()
+
+            print(f"[TRAIN] Training complete: {results}")
+
+        except Exception as e:
+            print(f"[TRAIN] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            error_data = json.dumps({'type': 'error', 'error': str(e)})
+            self.wfile.write(f'data: {error_data}\n\n'.encode())
+            self.wfile.flush()
+
+        # Cleanup
+        if job_id in eval_stream_params:
+            del eval_stream_params[job_id]
+
+    def _handle_trained_eval_stream(self, job_id: str, params: dict):
+        """Handle Server-Sent Events for trained agent evaluation."""
+        env_name = params['env_name']
+        episodes = params.get('episodes', 10)
+
+        print(f"[EVAL] Starting trained agent evaluation for {env_name}")
+
+        try:
+            from uniwrap.rl_agent import RLAgent, get_model_path
+            import time as time_module
+
+            # Check if model exists
+            model_path = get_model_path(env_name)
+            if not model_path.exists():
+                error_data = json.dumps({
+                    'type': 'error',
+                    'error': f'No trained model found for {env_name}. Train first!'
+                })
+                self.wfile.write(f'data: {error_data}\n\n'.encode())
+                self.wfile.flush()
+                return
+
+            # Import environment
+            module_name = f'environments.{env_name}'
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+            for key in list(sys.modules.keys()):
+                if key.startswith(f'environments.{env_name}'):
+                    del sys.modules[key]
+
+            env_module = importlib.import_module(f'environments.{env_name}')
+            env_class_name = env_module.__all__[0] if hasattr(env_module, '__all__') else None
+            if not env_class_name:
+                for name in dir(env_module):
+                    if name.endswith('Env') and not name.startswith('_'):
+                        env_class_name = name
+                        break
+            env_class = getattr(env_module, env_class_name)
+
+            # Load agent
+            agent = RLAgent(env_class)
+            agent.load(model_path)
+
+            # Get game dimensions for visualization
+            env = env_class(render_mode=None)
+            game_width = getattr(env, 'frame_size_x', 720)
+            game_height = getattr(env, 'frame_size_y', 480)
+            grid_size = getattr(env, 'grid_size', 10)
+
+            # Send config
+            config_data = json.dumps({
+                'type': 'config',
+                'game_width': game_width,
+                'game_height': game_height,
+                'grid_size': grid_size,
+                'total_episodes': episodes,
+                'agent_type': 'trained'
+            })
+            self.wfile.write(f'data: {config_data}\n\n'.encode())
+            self.wfile.flush()
+
+            # Run evaluation
+            all_results = []
+
+            for ep in range(episodes):
+                obs, info = env.reset()
+                episode_reward = 0
+                episode_steps = 0
+                max_steps = 500
+
+                print(f"[EVAL] Episode {ep+1}/{episodes} starting")
+
+                # Send episode start
+                start_data = json.dumps({
+                    'type': 'episode_start',
+                    'episode': ep + 1,
+                    'snake_body': [list(pos) for pos in env.snake_body] if hasattr(env, 'snake_body') else [],
+                    'food_pos': list(env.food_pos) if hasattr(env, 'food_pos') else []
+                })
+                self.wfile.write(f'data: {start_data}\n\n'.encode())
+                self.wfile.flush()
+
+                while episode_steps < max_steps:
+                    # Use trained agent's prediction
+                    action = agent.predict(obs, deterministic=True)
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    episode_reward += reward
+                    episode_steps += 1
+
+                    # Send frame update
+                    frame_data = json.dumps({
+                        'type': 'frame',
+                        'episode': ep + 1,
+                        'step': episode_steps,
+                        'snake_body': [list(pos) for pos in env.snake_body] if hasattr(env, 'snake_body') else [],
+                        'food_pos': list(env.food_pos) if hasattr(env, 'food_pos') else [],
+                        'score': info.get('score', 0),
+                        'reward': round(float(reward), 3),
+                        'total_reward': round(float(episode_reward), 2),
+                        'action': int(action),
+                        'terminated': terminated
+                    })
+                    self.wfile.write(f'data: {frame_data}\n\n'.encode())
+                    self.wfile.flush()
+
+                    time_module.sleep(0.01)
+
+                    if terminated or truncated:
+                        break
+
+                # Send episode end
+                score = info.get('score', 0)
+                all_results.append({
+                    'episode': ep + 1,
+                    'steps': episode_steps,
+                    'reward': round(float(episode_reward), 2),
+                    'score': score
+                })
+
+                end_data = json.dumps({
+                    'type': 'episode_end',
+                    'episode': ep + 1,
+                    'steps': episode_steps,
+                    'reward': round(float(episode_reward), 2),
+                    'score': score
+                })
+                self.wfile.write(f'data: {end_data}\n\n'.encode())
+                self.wfile.flush()
+
+                print(f"[EVAL] Episode {ep+1} ended - steps={episode_steps}, score={score}")
+
+            env.close()
+            agent.close()
+
+            # Send final results
+            total_reward = sum(r['reward'] for r in all_results)
+            total_steps = sum(r['steps'] for r in all_results)
+            total_score = sum(r['score'] for r in all_results)
+            max_score = max(r['score'] for r in all_results)
+
+            final_data = json.dumps({
+                'type': 'complete',
+                'episodes': all_results,
+                'avg_reward': round(total_reward / episodes, 2),
+                'avg_steps': round(total_steps / episodes, 1),
+                'avg_score': round(total_score / episodes, 2),
+                'max_score': max_score,
+                'agent_type': 'trained'
+            })
+            self.wfile.write(f'data: {final_data}\n\n'.encode())
+            self.wfile.flush()
+
+            print(f"[EVAL] Trained agent evaluation complete")
+
+        except Exception as e:
+            print(f"[EVAL] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            error_data = json.dumps({'type': 'error', 'error': str(e)})
+            self.wfile.write(f'data: {error_data}\n\n'.encode())
+            self.wfile.flush()
+
+        # Cleanup
+        if job_id in eval_stream_params:
+            del eval_stream_params[job_id]
 
     def do_OPTIONS(self):
         """Handle CORS preflight."""
@@ -416,6 +844,11 @@ class UniWrapAPI(BaseHTTPRequestHandler):
             # Server-Sent Events for live evaluation
             job_id = path.split('/')[-1]
             self._handle_eval_stream(job_id)
+
+        elif path.startswith('/api/train-stream/'):
+            # Server-Sent Events for training progress
+            job_id = path.split('/')[-1]
+            self._handle_train_stream(job_id)
 
         else:
             self.send_response(404)
@@ -465,6 +898,50 @@ class UniWrapAPI(BaseHTTPRequestHandler):
         elif path == '/api/run-episode':
             result = handle_run_episode(data)
             self._send_json(result, 200 if result.get('success') else 500)
+
+        elif path == '/api/start-training':
+            # Start training an RL agent - returns job_id for SSE connection
+            env_name = data.get('env_name', '')
+            timesteps = data.get('timesteps', 10000)
+            if not env_name:
+                self._send_json({'success': False, 'error': 'No environment specified'})
+            else:
+                job_id = str(int(time.time() * 1000))
+                eval_stream_params[job_id] = {
+                    'env_name': env_name,
+                    'timesteps': timesteps,
+                    'type': 'train'
+                }
+                self._send_json({'success': True, 'job_id': job_id})
+
+        elif path == '/api/start-trained-eval':
+            # Start evaluation with trained agent - returns job_id for SSE connection
+            env_name = data.get('env_name', '')
+            episodes = data.get('episodes', 10)
+            if not env_name:
+                self._send_json({'success': False, 'error': 'No environment specified'})
+            else:
+                job_id = str(int(time.time() * 1000))
+                eval_stream_params[job_id] = {
+                    'env_name': env_name,
+                    'episodes': episodes,
+                    'type': 'trained_eval'
+                }
+                self._send_json({'success': True, 'job_id': job_id})
+
+        elif path == '/api/check-model':
+            # Check if a trained model exists for an environment
+            env_name = data.get('env_name', '')
+            if not env_name:
+                self._send_json({'success': False, 'error': 'No environment specified'})
+            else:
+                from uniwrap.rl_agent import get_model_path
+                model_path = get_model_path(env_name)
+                self._send_json({
+                    'success': True,
+                    'has_model': model_path.exists(),
+                    'model_path': str(model_path) if model_path.exists() else None
+                })
 
         else:
             self.send_response(404)
@@ -1038,8 +1515,13 @@ def get_index_html():
                 <h2><span>⚡</span> Generate Environment</h2>
 
                 <div class="input-group">
-                    <label>GitHub Repository URL</label>
-                    <input type="text" id="repoUrl" placeholder="https://github.com/user/game-repo">
+                    <label>GitHub Repository URL or Game URL</label>
+                    <input type="text" id="repoUrl" placeholder="https://github.com/user/game-repo or https://example.com/game">
+                </div>
+
+                <div class="input-group">
+                    <label>Hints for the AI (optional)</label>
+                    <textarea id="userHints" rows="3" placeholder="e.g., 'The game ends when you hit an obstacle. Score is shown in top-right. Press Space to jump, Down to duck. Game over is detected by a restart button appearing.'" style="width: 100%; background: #0a0a14; border: 1px solid #2a2a4a; border-radius: 6px; padding: 10px; color: #fff; font-family: inherit; resize: vertical;"></textarea>
                 </div>
 
                 <button class="btn btn-primary" id="generateBtn" onclick="generate()">
@@ -1053,8 +1535,19 @@ def get_index_html():
 
                 <div id="generateResult"></div>
 
+                <!-- Feedback for regeneration -->
+                <div id="feedbackSection" class="hidden" style="margin-top: 15px;">
+                    <div class="input-group">
+                        <label>Feedback - What's wrong? How should it be fixed?</label>
+                        <textarea id="feedbackText" rows="2" placeholder="e.g., 'Game over detection not working - the game freezes but episode continues. Try detecting when screen stops changing.'" style="width: 100%; background: #0a0a14; border: 1px solid #2a2a4a; border-radius: 6px; padding: 10px; color: #fff; font-family: inherit; resize: vertical;"></textarea>
+                    </div>
+                    <button class="btn btn-secondary" onclick="regenerateWithFeedback()">
+                        <span>🔄</span> Regenerate with Feedback
+                    </button>
+                </div>
+
                 <div class="log-box" id="logBox" style="margin-top: 20px;">
-                    <div class="log-line">Ready. Enter a GitHub URL to generate an RL environment.</div>
+                    <div class="log-line">Ready. Enter a GitHub URL or game URL to generate an RL environment.</div>
                 </div>
             </div>
 
@@ -1151,26 +1644,90 @@ def get_index_html():
                 </div>
             </div>
 
-            <!-- Evaluate Section -->
+            <!-- Test & Train Agent Section -->
             <div class="card" style="grid-column: span 2;">
-                <h2><span>📊</span> Evaluate Environment</h2>
+                <h2><span>🎮</span> Test & Train Agent</h2>
 
-                <div style="display: flex; gap: 15px; align-items: flex-end;">
-                    <div class="input-group" style="flex: 1; margin-bottom: 0;">
+                <p style="color: #888; margin-bottom: 20px; font-size: 0.9em;">
+                    Select an environment, then: <strong>1)</strong> Test with random actions to verify it works,
+                    <strong>2)</strong> Train an RL agent to learn the game,
+                    <strong>3)</strong> Watch the trained agent play.
+                </p>
+
+                <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
+                    <div class="input-group" style="flex: 1; min-width: 200px; margin-bottom: 0;">
                         <label>Select Environment</label>
-                        <select id="evalEnvSelect">
+                        <select id="evalEnvSelect" onchange="onEnvChange()">
                             <option value="">-- Select an environment --</option>
                         </select>
                     </div>
 
-                    <div class="input-group" style="width: 150px; margin-bottom: 0;">
+                    <div class="input-group" style="width: 130px; margin-bottom: 0;">
                         <label>Episodes</label>
-                        <input type="number" id="evalEpisodes" value="20" min="1" max="100">
+                        <input type="number" id="evalEpisodes" value="10" min="1" max="100">
                     </div>
 
-                    <button class="btn btn-primary" id="evalBtn" onclick="runEvaluation()">
-                        <span>▶️</span> Run Evaluation
+                    <div class="input-group" style="width: 160px; margin-bottom: 0;">
+                        <label>Training Steps</label>
+                        <select id="trainSteps">
+                            <option value="5000">5K (Quick)</option>
+                            <option value="10000" selected>10K (Normal)</option>
+                            <option value="25000">25K (Better)</option>
+                            <option value="50000">50K (Good)</option>
+                            <option value="100000">100K (Best)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div style="display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap;">
+                    <button class="btn btn-secondary" id="evalBtn" onclick="runEvaluation()">
+                        <span>🎲</span> 1. Test Random
                     </button>
+
+                    <button class="btn btn-primary" id="trainBtn" onclick="startTraining()">
+                        <span>🧠</span> 2. Train Agent
+                    </button>
+
+                    <button class="btn btn-secondary" id="trainedEvalBtn" onclick="runTrainedEval()" disabled>
+                        <span>🎯</span> 3. Watch Trained
+                    </button>
+
+                    <span id="modelStatus" style="display: flex; align-items: center; color: #888; font-size: 0.85em; margin-left: 10px;"></span>
+                </div>
+
+                <!-- Training Progress -->
+                <div id="trainProgressContainer" class="hidden" style="margin-top: 20px;">
+                    <div style="background: #0f0f1a; border-radius: 8px; padding: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <span style="color: #feca57; font-weight: 600;">Training in Progress</span>
+                            <span id="trainProgressText" style="color: #888;">0%</span>
+                        </div>
+                        <div style="background: #1a1a2e; border-radius: 4px; height: 8px; overflow: hidden; margin-bottom: 10px;">
+                            <div id="trainProgressBar" style="background: linear-gradient(90deg, #ff6b6b, #feca57); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr); gap: 10px;">
+                            <div class="stat-box" style="padding: 10px;">
+                                <div class="value" id="trainEpisodes" style="font-size: 1.3em;">0</div>
+                                <div class="label">Episodes</div>
+                            </div>
+                            <div class="stat-box" style="padding: 10px;">
+                                <div class="value" id="trainTimesteps" style="font-size: 1.3em;">0</div>
+                                <div class="label">Timesteps</div>
+                            </div>
+                            <div class="stat-box" style="padding: 10px;">
+                                <div class="value" id="trainAvgReward" style="font-size: 1.3em;">0</div>
+                                <div class="label">Avg Reward</div>
+                            </div>
+                            <div class="stat-box" style="padding: 10px;">
+                                <div class="value" id="trainLastReward" style="font-size: 1.3em;">0</div>
+                                <div class="label">Last Ep</div>
+                            </div>
+                        </div>
+                        <div id="trainStatus" style="margin-top: 10px; color: #888; font-size: 0.9em;">
+                            Initializing...
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Live Game Visualization -->
@@ -1180,6 +1737,7 @@ def get_index_html():
                             <canvas id="evalGameCanvas" width="360" height="240" style="background: #000; border-radius: 8px; border: 2px solid #2a2a4a;"></canvas>
                         </div>
                         <div style="flex: 1;">
+                            <div id="agentTypeLabel" style="color: #00d9ff; font-weight: 600; margin-bottom: 10px;">Random Agent</div>
                             <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
                                 <div class="stat-box">
                                     <div class="value" id="evalEpisodeNum">0</div>
@@ -1204,12 +1762,13 @@ def get_index_html():
                                 </div>
                             </div>
                             <div id="evalStatus" style="margin-top: 10px; color: #888; font-size: 0.9em;">
-                                Starting evaluation...
+                                Ready
                             </div>
                         </div>
                     </div>
                 </div>
 
+                <!-- Results -->
                 <div id="evalResults" class="hidden" style="margin-top: 20px;">
                     <div class="stats-grid">
                         <div class="stat-box">
@@ -1243,6 +1802,7 @@ def get_index_html():
         let gridSize = 10;
         let totalEpisodes = 0;
         let eventSource = null;
+        let isWebGame = false;  // Track if current eval is a web game
 
         // Load environments on page load
         document.addEventListener('DOMContentLoaded', refreshEnvs);
@@ -1278,6 +1838,27 @@ def get_index_html():
 
                 evalSelect.innerHTML = options;
 
+                // Check if any environment has a trained model and update options
+                data.environments.forEach(async env => {
+                    try {
+                        const res = await fetch('/api/check-model', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ env_name: env.name })
+                        });
+                        const modelData = await res.json();
+                        if (modelData.has_model) {
+                            const option = evalSelect.querySelector(`option[value="${env.name}"]`);
+                            if (option) {
+                                option.textContent = `${env.name} (${env.class}) [trained]`;
+                            }
+                        }
+                    } catch (e) {}
+                });
+
+                // Update model status for currently selected env
+                onEnvChange();
+
             } catch (e) {
                 console.error('Failed to load environments:', e);
             }
@@ -1285,6 +1866,39 @@ def get_index_html():
 
         function selectEnv(name) {
             document.getElementById('evalEnvSelect').value = name;
+            onEnvChange();
+        }
+
+        async function onEnvChange() {
+            const envName = document.getElementById('evalEnvSelect').value;
+            const evalBtn = document.getElementById('trainedEvalBtn');
+            const modelStatus = document.getElementById('modelStatus');
+
+            if (!envName) {
+                evalBtn.disabled = true;
+                modelStatus.innerHTML = '';
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/check-model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ env_name: envName })
+                });
+                const data = await res.json();
+
+                if (data.has_model) {
+                    evalBtn.disabled = false;
+                    modelStatus.innerHTML = '<span style="color: #0f6;">✓ Trained model available</span>';
+                } else {
+                    evalBtn.disabled = true;
+                    modelStatus.innerHTML = '<span style="color: #888;">No trained model yet</span>';
+                }
+            } catch (e) {
+                evalBtn.disabled = true;
+                modelStatus.innerHTML = '';
+            }
         }
 
         function addLog(msg, isError = false) {
@@ -1296,10 +1910,15 @@ def get_index_html():
             logBox.scrollTop = logBox.scrollHeight;
         }
 
+        let lastGeneratedUrl = '';
+        let lastGeneratedEnvName = '';
+
         async function generate() {
             const url = document.getElementById('repoUrl').value.trim();
+            const hints = document.getElementById('userHints').value.trim();
+
             if (!url) {
-                alert('Please enter a repository URL');
+                alert('Please enter a repository URL or game URL');
                 return;
             }
 
@@ -1307,19 +1926,24 @@ def get_index_html():
             const loading = document.getElementById('generateLoading');
             const result = document.getElementById('generateResult');
             const logBox = document.getElementById('logBox');
+            const feedbackSection = document.getElementById('feedbackSection');
 
             btn.disabled = true;
             loading.classList.remove('hidden');
             result.innerHTML = '';
             logBox.innerHTML = '';
+            feedbackSection.classList.add('hidden');
 
             addLog(`Starting generation for: ${url}`);
+            if (hints) {
+                addLog(`User hints: ${hints}`);
+            }
 
             try {
                 const res = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url })
+                    body: JSON.stringify({ url, hints })
                 });
 
                 const data = await res.json();
@@ -1334,9 +1958,82 @@ def get_index_html():
 
                     result.innerHTML = '<div class="success-msg">✅ Environment generated successfully!</div>';
                     refreshEnvs();
+
+                    // Store for regeneration and show feedback section
+                    lastGeneratedUrl = url;
+                    lastGeneratedEnvName = data.env_name || '';
+                    feedbackSection.classList.remove('hidden');
+                    document.getElementById('feedbackText').value = '';
                 } else {
                     addLog(data.error || 'Unknown error', true);
                     result.innerHTML = `<div class="error-msg">❌ ${data.error || 'Generation failed'}</div>`;
+
+                    // Still show feedback section for retrying
+                    lastGeneratedUrl = url;
+                    feedbackSection.classList.remove('hidden');
+                }
+
+            } catch (e) {
+                addLog(e.message, true);
+                result.innerHTML = `<div class="error-msg">❌ ${e.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                loading.classList.add('hidden');
+            }
+        }
+
+        async function regenerateWithFeedback() {
+            const feedback = document.getElementById('feedbackText').value.trim();
+            const hints = document.getElementById('userHints').value.trim();
+
+            if (!lastGeneratedUrl) {
+                alert('No previous generation to regenerate');
+                return;
+            }
+
+            const btn = document.querySelector('#feedbackSection button');
+            const loading = document.getElementById('generateLoading');
+            const result = document.getElementById('generateResult');
+            const logBox = document.getElementById('logBox');
+
+            btn.disabled = true;
+            loading.classList.remove('hidden');
+            result.innerHTML = '';
+            logBox.innerHTML = '';
+
+            addLog(`Regenerating with feedback...`);
+            if (feedback) {
+                addLog(`Feedback: ${feedback}`);
+            }
+
+            try {
+                const res = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: lastGeneratedUrl,
+                        hints: hints,
+                        feedback: feedback,
+                        env_name: lastGeneratedEnvName,
+                        regenerate: true
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.success) {
+                    if (data.output) {
+                        data.output.split('\\n').forEach(line => {
+                            if (line.trim()) addLog(line);
+                        });
+                    }
+
+                    result.innerHTML = '<div class="success-msg">✅ Environment regenerated successfully!</div>';
+                    refreshEnvs();
+                    lastGeneratedEnvName = data.env_name || lastGeneratedEnvName;
+                } else {
+                    addLog(data.error || 'Unknown error', true);
+                    result.innerHTML = `<div class="error-msg">❌ ${data.error || 'Regeneration failed'}</div>`;
                 }
 
             } catch (e) {
@@ -1362,8 +2059,14 @@ def get_index_html():
             const results = document.getElementById('evalResults');
 
             btn.disabled = true;
+            document.getElementById('trainBtn').disabled = true;
+            document.getElementById('trainedEvalBtn').disabled = true;
             gameContainer.classList.remove('hidden');
             results.classList.add('hidden');
+
+            // Set agent type label
+            document.getElementById('agentTypeLabel').textContent = 'Random Agent';
+            document.getElementById('agentTypeLabel').style.color = '#00d9ff';
 
             // Close any existing event source
             if (eventSource) {
@@ -1406,26 +2109,35 @@ def get_index_html():
                     if (msg.type === 'config') {
                         gameWidth = msg.game_width;
                         gameHeight = msg.game_height;
-                        gridSize = msg.grid_size;
+                        gridSize = msg.grid_size || 10;
                         totalEpisodes = msg.total_episodes;
+                        isWebGame = msg.is_web_game || false;
                         canvas.height = Math.round(360 * gameHeight / gameWidth);
                         document.getElementById('evalStatus').textContent = 'Running evaluation...';
                     }
                     else if (msg.type === 'episode_start') {
                         document.getElementById('evalEpisodeNum').textContent = msg.episode;
                         document.getElementById('evalStepNum').textContent = '0';
-                        document.getElementById('evalCurrentScore').textContent = '0';
+                        document.getElementById('evalCurrentScore').textContent = msg.score || '0';
                         document.getElementById('evalStatus').textContent = `Episode ${msg.episode} started`;
-                        renderEvalFrame({
-                            snake_body: msg.snake_body,
-                            food_pos: msg.food_pos,
-                            score: 0
-                        });
+                        if (msg.screenshot) {
+                            renderScreenshot(msg.screenshot);
+                        } else if (msg.snake_body) {
+                            renderEvalFrame({
+                                snake_body: msg.snake_body,
+                                food_pos: msg.food_pos,
+                                score: 0
+                            });
+                        }
                     }
                     else if (msg.type === 'frame') {
                         document.getElementById('evalStepNum').textContent = msg.step;
                         document.getElementById('evalCurrentScore').textContent = msg.score;
-                        renderEvalFrame(msg);
+                        if (msg.screenshot) {
+                            renderScreenshot(msg.screenshot);
+                        } else {
+                            renderEvalFrame(msg);
+                        }
                     }
                     else if (msg.type === 'episode_end') {
                         const progress = (msg.episode / totalEpisodes) * 100;
@@ -1437,6 +2149,8 @@ def get_index_html():
                         eventSource.close();
                         eventSource = null;
                         btn.disabled = false;
+                        document.getElementById('trainBtn').disabled = false;
+                        onEnvChange(); // Re-check trained model status
 
                         // Update final stats
                         document.getElementById('statAvgReward').textContent = msg.avg_reward;
@@ -1460,6 +2174,8 @@ def get_index_html():
                         eventSource.close();
                         eventSource = null;
                         btn.disabled = false;
+                        document.getElementById('trainBtn').disabled = false;
+                        onEnvChange();
                         alert(msg.error);
                     }
                 };
@@ -1468,12 +2184,16 @@ def get_index_html():
                     eventSource.close();
                     eventSource = null;
                     btn.disabled = false;
+                    document.getElementById('trainBtn').disabled = false;
+                    onEnvChange();
                     document.getElementById('evalStatus').textContent = 'Connection lost';
                 };
 
             } catch (e) {
                 alert(e.message);
                 btn.disabled = false;
+                document.getElementById('trainBtn').disabled = false;
+                onEnvChange();
             }
         }
 
@@ -1542,6 +2262,17 @@ def get_index_html():
                 });
                 ctx.shadowBlur = 0;
             }
+        }
+
+        function renderScreenshot(base64Data) {
+            // Render screenshot to the eval canvas
+            const canvas = document.getElementById('evalGameCanvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            img.onload = function() {
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            };
+            img.src = 'data:image/jpeg;base64,' + base64Data;
         }
 
         // === Web Game Evaluation Functions ===
@@ -1668,6 +2399,312 @@ def get_index_html():
             } catch (e) {
                 alert(e.message);
                 btn.disabled = false;
+            }
+        }
+
+        // === RL Training Functions ===
+
+        let trainEventSource = null;
+        let trainTotalTimesteps = 10000;
+
+        async function startTraining() {
+            const envName = document.getElementById('evalEnvSelect').value;
+            const timesteps = parseInt(document.getElementById('trainSteps').value) || 10000;
+
+            if (!envName) {
+                alert('Please select an environment');
+                return;
+            }
+
+            const btn = document.getElementById('trainBtn');
+            const evalBtn = document.getElementById('trainedEvalBtn');
+            const testBtn = document.getElementById('evalBtn');
+            const progressContainer = document.getElementById('trainProgressContainer');
+            const gameContainer = document.getElementById('evalGameContainer');
+
+            btn.disabled = true;
+            evalBtn.disabled = true;
+            testBtn.disabled = true;
+            progressContainer.classList.remove('hidden');
+            gameContainer.classList.add('hidden');
+            document.getElementById('evalResults').classList.add('hidden');
+
+            // Reset stats
+            document.getElementById('trainEpisodes').textContent = '0';
+            document.getElementById('trainTimesteps').textContent = '0';
+            document.getElementById('trainAvgReward').textContent = '0';
+            document.getElementById('trainLastReward').textContent = '0';
+            document.getElementById('trainProgressBar').style.width = '0%';
+            document.getElementById('trainProgressText').textContent = '0%';
+            document.getElementById('trainStatus').textContent = 'Starting training...';
+
+            trainTotalTimesteps = timesteps;
+
+            // Close any existing event source
+            if (trainEventSource) {
+                trainEventSource.close();
+            }
+
+            try {
+                // Start the training stream
+                const res = await fetch('/api/start-training', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ env_name: envName, timesteps })
+                });
+
+                const data = await res.json();
+                if (!data.success) {
+                    alert(data.error || 'Failed to start training');
+                    btn.disabled = false;
+                    return;
+                }
+
+                const jobId = data.job_id;
+                document.getElementById('trainStatus').textContent = 'Initializing PPO agent...';
+
+                // Show game visualization during training
+                gameContainer.classList.remove('hidden');
+                document.getElementById('agentTypeLabel').textContent = 'Training PPO Agent';
+                document.getElementById('agentTypeLabel').style.color = '#ff6b6b';
+
+                // Setup canvas
+                const canvas = document.getElementById('evalGameCanvas');
+                canvas.width = 360;
+                canvas.height = 240;
+
+                // Connect to SSE stream
+                trainEventSource = new EventSource(`/api/eval-stream/${jobId}`);
+
+                trainEventSource.onmessage = function(event) {
+                    const msg = JSON.parse(event.data);
+
+                    if (msg.type === 'config') {
+                        gameWidth = msg.game_width;
+                        gameHeight = msg.game_height;
+                        gridSize = msg.grid_size || 10;
+                        canvas.height = Math.round(360 * gameHeight / gameWidth);
+                    }
+                    else if (msg.type === 'training_start') {
+                        document.getElementById('trainStatus').textContent = 'Training in progress...';
+                    }
+                    else if (msg.type === 'training_frame') {
+                        // Update live visualization during training
+                        document.getElementById('evalStepNum').textContent = msg.step;
+                        document.getElementById('evalCurrentScore').textContent = msg.score || 0;
+
+                        if (msg.screenshot) {
+                            renderScreenshot(msg.screenshot);
+                        } else if (msg.snake_body) {
+                            renderEvalFrame(msg);
+                        }
+                    }
+                    else if (msg.type === 'episode_complete') {
+                        document.getElementById('trainEpisodes').textContent = msg.episode;
+                        document.getElementById('trainTimesteps').textContent = msg.total_timesteps.toLocaleString();
+                        document.getElementById('trainAvgReward').textContent = msg.avg_reward.toFixed(1);
+                        document.getElementById('trainLastReward').textContent = msg.reward.toFixed(1);
+                        document.getElementById('evalEpisodeNum').textContent = msg.episode;
+
+                        const progress = (msg.total_timesteps / trainTotalTimesteps) * 100;
+                        document.getElementById('trainProgressBar').style.width = Math.min(progress, 100) + '%';
+                        document.getElementById('trainProgressText').textContent = Math.min(progress, 100).toFixed(1) + '%';
+                        document.getElementById('evalProgressBar').style.width = Math.min(progress, 100) + '%';
+                        document.getElementById('evalProgressText').textContent = Math.min(progress, 100).toFixed(1) + '%';
+                        document.getElementById('trainStatus').textContent = `Episode ${msg.episode}: reward=${msg.reward.toFixed(1)}, avg=${msg.avg_reward.toFixed(1)}`;
+                    }
+                    else if (msg.type === 'training_complete') {
+                        trainEventSource.close();
+                        trainEventSource = null;
+                        btn.disabled = false;
+                        evalBtn.disabled = false;
+                        testBtn.disabled = false;
+
+                        document.getElementById('trainProgressBar').style.width = '100%';
+                        document.getElementById('trainProgressText').textContent = '100%';
+                        document.getElementById('trainStatus').textContent = `Training complete! Final avg reward: ${msg.final_avg_reward.toFixed(2)}`;
+                        document.getElementById('modelStatus').innerHTML = '<span style="color: #0f6;">✓ Trained model available</span>';
+
+                        // Refresh envs to update the trained status
+                        refreshEnvs();
+                    }
+                    else if (msg.type === 'error') {
+                        trainEventSource.close();
+                        trainEventSource = null;
+                        btn.disabled = false;
+                        testBtn.disabled = false;
+                        onEnvChange();
+                        document.getElementById('trainStatus').textContent = 'Error: ' + msg.error;
+                        alert(msg.error);
+                    }
+                };
+
+                trainEventSource.onerror = function() {
+                    trainEventSource.close();
+                    trainEventSource = null;
+                    btn.disabled = false;
+                    testBtn.disabled = false;
+                    onEnvChange();
+                    document.getElementById('trainStatus').textContent = 'Connection lost';
+                };
+
+            } catch (e) {
+                alert(e.message);
+                btn.disabled = false;
+                testBtn.disabled = false;
+                onEnvChange();
+            }
+        }
+
+        let trainedEvalSource = null;
+
+        async function runTrainedEval() {
+            const envName = document.getElementById('evalEnvSelect').value;
+            const episodes = parseInt(document.getElementById('evalEpisodes').value) || 10;
+
+            if (!envName) {
+                alert('Please select an environment');
+                return;
+            }
+
+            const btn = document.getElementById('trainedEvalBtn');
+            const trainBtn = document.getElementById('trainBtn');
+            const testBtn = document.getElementById('evalBtn');
+            const gameContainer = document.getElementById('evalGameContainer');
+            const results = document.getElementById('evalResults');
+            const progressContainer = document.getElementById('trainProgressContainer');
+
+            btn.disabled = true;
+            trainBtn.disabled = true;
+            testBtn.disabled = true;
+            gameContainer.classList.remove('hidden');
+            results.classList.add('hidden');
+            progressContainer.classList.add('hidden');
+
+            // Set agent type label
+            document.getElementById('agentTypeLabel').textContent = 'Trained PPO Agent';
+            document.getElementById('agentTypeLabel').style.color = '#feca57';
+
+            // Close any existing event source
+            if (trainedEvalSource) {
+                trainedEvalSource.close();
+            }
+
+            try {
+                // Start the trained evaluation stream
+                const res = await fetch('/api/start-trained-eval', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ env_name: envName, episodes })
+                });
+
+                const data = await res.json();
+                if (!data.success) {
+                    alert(data.error || 'Failed to start evaluation');
+                    btn.disabled = false;
+                    trainBtn.disabled = false;
+                    testBtn.disabled = false;
+                    return;
+                }
+
+                const jobId = data.job_id;
+                totalEpisodes = episodes;
+
+                // Setup canvas
+                const canvas = document.getElementById('evalGameCanvas');
+                canvas.width = 360;
+                canvas.height = 240;
+
+                document.getElementById('evalStatus').textContent = 'Loading trained model...';
+                document.getElementById('evalProgressText').textContent = `0 / ${episodes} episodes`;
+                document.getElementById('evalProgressBar').style.width = '0%';
+
+                // Connect to SSE stream
+                trainedEvalSource = new EventSource(`/api/eval-stream/${jobId}`);
+
+                trainedEvalSource.onmessage = function(event) {
+                    const msg = JSON.parse(event.data);
+
+                    if (msg.type === 'config') {
+                        gameWidth = msg.game_width;
+                        gameHeight = msg.game_height;
+                        gridSize = msg.grid_size;
+                        totalEpisodes = msg.total_episodes;
+                        canvas.height = Math.round(360 * gameHeight / gameWidth);
+                        document.getElementById('evalStatus').textContent = 'Running trained agent...';
+                    }
+                    else if (msg.type === 'episode_start') {
+                        document.getElementById('evalEpisodeNum').textContent = msg.episode;
+                        document.getElementById('evalStepNum').textContent = '0';
+                        document.getElementById('evalCurrentScore').textContent = '0';
+                        document.getElementById('evalStatus').textContent = `Episode ${msg.episode} - Trained agent playing`;
+                        renderEvalFrame({
+                            snake_body: msg.snake_body,
+                            food_pos: msg.food_pos,
+                            score: 0
+                        });
+                    }
+                    else if (msg.type === 'frame') {
+                        document.getElementById('evalStepNum').textContent = msg.step;
+                        document.getElementById('evalCurrentScore').textContent = msg.score;
+                        renderEvalFrame(msg);
+                    }
+                    else if (msg.type === 'episode_end') {
+                        const progress = (msg.episode / totalEpisodes) * 100;
+                        document.getElementById('evalProgressBar').style.width = progress + '%';
+                        document.getElementById('evalProgressText').textContent = `${msg.episode} / ${totalEpisodes} episodes`;
+                        document.getElementById('evalStatus').textContent = `Episode ${msg.episode} done - Score: ${msg.score}, Steps: ${msg.steps}`;
+                    }
+                    else if (msg.type === 'complete') {
+                        trainedEvalSource.close();
+                        trainedEvalSource = null;
+                        btn.disabled = false;
+                        trainBtn.disabled = false;
+                        testBtn.disabled = false;
+
+                        // Update final stats
+                        document.getElementById('statAvgReward').textContent = msg.avg_reward;
+                        document.getElementById('statAvgSteps').textContent = msg.avg_steps;
+                        document.getElementById('statAvgScore').textContent = msg.avg_score;
+                        document.getElementById('statMaxScore').textContent = msg.max_score;
+
+                        // Draw chart
+                        const chart = document.getElementById('episodeChart');
+                        const maxReward = Math.max(...msg.episodes.map(e => Math.abs(e.reward)), 1);
+                        chart.innerHTML = msg.episodes.map(e => {
+                            const height = Math.max(5, (Math.abs(e.reward) / maxReward) * 120);
+                            const color = e.reward >= 0 ? '#0f6' : '#f55';
+                            return `<div class="episode-bar" style="height: ${height}px; background: ${color};" title="Ep ${e.episode}: ${e.reward}"></div>`;
+                        }).join('');
+
+                        document.getElementById('evalStatus').textContent = 'Trained agent evaluation complete!';
+                        results.classList.remove('hidden');
+                    }
+                    else if (msg.type === 'error') {
+                        trainedEvalSource.close();
+                        trainedEvalSource = null;
+                        btn.disabled = false;
+                        trainBtn.disabled = false;
+                        testBtn.disabled = false;
+                        document.getElementById('evalStatus').textContent = 'Error: ' + msg.error;
+                        alert(msg.error);
+                    }
+                };
+
+                trainedEvalSource.onerror = function() {
+                    trainedEvalSource.close();
+                    trainedEvalSource = null;
+                    btn.disabled = false;
+                    trainBtn.disabled = false;
+                    testBtn.disabled = false;
+                    document.getElementById('evalStatus').textContent = 'Connection lost';
+                };
+
+            } catch (e) {
+                alert(e.message);
+                btn.disabled = false;
+                trainBtn.disabled = false;
+                testBtn.disabled = false;
             }
         }
     </script>

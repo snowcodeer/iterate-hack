@@ -57,36 +57,55 @@ The game URL is: {game_url}
 Here is information about the web page:
 {page_info}
 
+{extra_context}
+
 You must create a COMPLETE, WORKING Gymnasium environment that:
 1. Uses Playwright to open the game in a browser
 2. Sends keyboard inputs to control the game (space, arrow keys, etc.)
-3. Captures screenshots and/or reads game state from the DOM
-4. Extracts observations (game state, score, positions if visible)
-5. Calculates rewards based on survival time, score, etc.
-6. Detects game over conditions
+3. Captures screenshots as observations (RGB or grayscale numpy arrays)
+4. Calculates rewards based on survival time, score increase, etc.
+5. RELIABLY detects game over conditions
 
-IMPORTANT REQUIREMENTS:
-- Use playwright.sync_api for browser automation
-- The environment should work headlessly for training
-- Support render_mode="human" to show the browser
-- Use keyboard.press() for discrete actions like jump/duck
-- For observations, you can use:
-  - Screenshots converted to numpy arrays (for CNN-based agents)
-  - DOM element positions/values if accessible
-  - Simple features like "is obstacle near", "current speed", etc.
-- For the Chrome Dino game specifically:
-  - Actions: 0=do nothing, 1=jump (space), 2=duck (down arrow)
-  - The game runs in a canvas element
-  - Score is usually visible in the DOM
-  - Game over is detected when the game stops/shows restart
+CRITICAL REQUIREMENTS FOR GAME OVER DETECTION:
+- Many games don't expose game state via JavaScript
+- Use VISUAL DETECTION as the PRIMARY method:
+  - Compare consecutive screenshots - if they're nearly identical for 5+ frames, the game is likely over
+  - Look for dramatic color changes (red flash, game over screen)
+  - Track if the game elements stop moving
+- As BACKUP, try JavaScript/DOM detection:
+  - Look for game over elements: '.game-over', '.crashed', '.restart', '[class*="game-over"]'
+  - Try accessing game internals if available (Runner.instance_.crashed for Chrome Dino)
+- ALWAYS implement visual detection as fallback
+
+SCREENSHOT AND OBSERVATION:
+- Use page.screenshot(clip={{...}}) to capture just the game canvas/area
+- Find the canvas/game element bounding box first
+- Use a reasonable resolution (300-600px width) - not too small (hard to see), not too large (slow)
+- Convert to numpy array using PIL
+- For training efficiency, grayscale is fine; for visualization, use RGB
+
+BROWSER SETUP:
+- Use larger viewport (1024x768 or more) so game isn't cropped
+- Scroll game element into view: element.scroll_into_view_if_needed()
+- Click on game area to focus before starting
+- Handle cookie consent popups that may block the game
+
+REWARD DESIGN:
+- +0.1 per step survived (survival reward)
+- +score_delta for score increases
+- -1.0 penalty when game over detected
+- Keep rewards small and balanced
 
 Output a complete Python file with:
-1. All necessary imports (gymnasium, playwright, numpy, PIL if needed)
+1. All necessary imports (gymnasium, playwright, numpy, PIL, time)
 2. A gym.Env subclass with __init__, reset, step, render, close methods
-3. Proper action space (Discrete) and observation space (Box for screenshot or features)
-4. Browser lifecycle management
+3. Discrete action space (typically: 0=nothing, 1=jump/space, 2=duck/down)
+4. Box observation space for screenshots
+5. _start_browser() that handles consent popups
+6. _get_canvas_screenshot() that clips to game area
+7. _is_game_over() with BOTH visual AND JavaScript detection
 
-The class name should be based on the game (e.g., DinoGameEnv, ChromeDinoEnv).
+The class name should be based on the game URL (e.g., DinoGameEnv for dinosaur-game.io).
 
 Output ONLY the Python code. No explanations, no markdown code blocks, just the raw Python code starting with imports."""
 
@@ -284,7 +303,8 @@ def generate_web_game_env_code(
     game_url: str,
     page_info: str,
     model: str = "claude-sonnet-4-5-20250929",
-    api_key: str = None
+    api_key: str = None,
+    extra_context: str = ""
 ) -> str:
     """Generate environment code for a web-based game.
 
@@ -296,13 +316,25 @@ def generate_web_game_env_code(
         page_info: Information about the page (from web fetch)
         model: Claude model to use
         api_key: Optional API key
+        extra_context: Additional hints/feedback from user
 
     Returns:
         Complete Python code for the environment
     """
+    # Build extra context section
+    context_section = ""
+    if extra_context:
+        context_section = f"""
+=== USER PROVIDED INFORMATION ===
+{extra_context}
+
+IMPORTANT: Pay close attention to the user's hints above. They have tested this game and know how it works.
+"""
+
     prompt = WEB_GAME_PROMPT.format(
         game_url=game_url,
-        page_info=page_info
+        page_info=page_info,
+        extra_context=context_section
     )
 
     client = ClaudeClient(api_key=api_key)

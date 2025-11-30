@@ -143,19 +143,95 @@ class WebGameEnv(gym.Env):
                 button = self.page.locator(selector).first
                 if button.is_visible(timeout=500):
                     button.click()
-                    print(f"Clicked consent button: {selector}")
                     time.sleep(0.5)
-                    return
+                    break
             except:
                 continue
 
         # Also try clicking any visible "Consent" text
         try:
             self.page.get_by_role("button", name="Consent").click(timeout=1000)
-            print("Clicked Consent button by role")
             time.sleep(0.5)
         except:
             pass
+
+        # Hide annoying overlays (GitHub ribbons, ads, etc.)
+        self._hide_overlays()
+
+    def _hide_overlays(self):
+        """Hide distracting overlay elements like GitHub ribbons, ads, etc."""
+        try:
+            self.page.evaluate("""
+                () => {
+                    // Common overlay selectors to hide
+                    const selectorsToHide = [
+                        // GitHub ribbons/forks
+                        '[class*="github"]',
+                        '[id*="github"]',
+                        '[href*="github.com"]',
+                        'a[href*="fork"]',
+                        '[class*="fork"]',
+                        '[id*="fork"]',
+                        '.github-corner',
+                        '.github-ribbon',
+                        '.gh-ribbon',
+
+                        // Ads and promotions
+                        '[class*="ad-"]',
+                        '[class*="ads-"]',
+                        '[id*="ad-"]',
+                        '[class*="banner"]',
+                        '[class*="promo"]',
+
+                        // Social buttons
+                        '[class*="social"]',
+                        '[class*="share"]',
+
+                        // Fixed/sticky elements that might overlay the game
+                        '[class*="overlay"]',
+                        '[class*="popup"]',
+                        '[class*="modal"]',
+
+                        // Cookie notices (in case they weren't clicked)
+                        '[class*="cookie"]',
+                        '[class*="gdpr"]',
+                        '[class*="consent"]',
+                    ];
+
+                    for (const selector of selectorsToHide) {
+                        try {
+                            const elements = document.querySelectorAll(selector);
+                            elements.forEach(el => {
+                                // Don't hide the main game canvas
+                                if (el.tagName !== 'CANVAS' && !el.querySelector('canvas')) {
+                                    el.style.display = 'none';
+                                    el.style.visibility = 'hidden';
+                                    el.style.opacity = '0';
+                                    el.style.pointerEvents = 'none';
+                                }
+                            });
+                        } catch (e) {}
+                    }
+
+                    // Also hide any fixed/absolute positioned elements at corners
+                    const allElements = document.querySelectorAll('*');
+                    allElements.forEach(el => {
+                        const style = getComputedStyle(el);
+                        if (style.position === 'fixed' || style.position === 'absolute') {
+                            const rect = el.getBoundingClientRect();
+                            // If it's in a corner and small, likely an overlay
+                            if ((rect.top < 100 || rect.bottom > window.innerHeight - 100) &&
+                                (rect.left < 100 || rect.right > window.innerWidth - 100) &&
+                                rect.width < 200 && rect.height < 200 &&
+                                el.tagName !== 'CANVAS') {
+                                el.style.display = 'none';
+                            }
+                        }
+                    });
+                }
+            """)
+        except Exception as e:
+            pass  # Silently ignore if this fails
 
     def _close_browser(self):
         """Close the browser."""
@@ -305,59 +381,66 @@ class WebGameEnv(gym.Env):
 
 class DinoGameEnv(WebGameEnv):
     """
-    Environment specifically for the Chrome Dinosaur game.
+    Environment specifically for the Chrome Dinosaur game at dinosaur-game.io.
     """
 
     def __init__(self, render_mode: Optional[str] = None):
         game_config = {
             'start_key': 'Space',
             'action_keys': ['Space', 'ArrowDown'],  # Jump, Duck
-            # JavaScript to extract game state from dinosaur-game.io
             'score_js': '''
                 (() => {
-                    const scoreEl = document.querySelector('.score') ||
-                                   document.querySelector('[class*="score"]') ||
-                                   document.querySelector('#score');
-                    if (scoreEl) {
-                        const text = scoreEl.textContent || scoreEl.innerText;
+                    // Try multiple methods to get score
+                    // Method 1: Look for score display elements
+                    const scoreEls = document.querySelectorAll('[class*="score"], [id*="score"], .distance-meter');
+                    for (const el of scoreEls) {
+                        const text = el.textContent || el.innerText || '';
                         const num = parseInt(text.replace(/[^0-9]/g, ''));
-                        return isNaN(num) ? 0 : num;
+                        if (!isNaN(num) && num > 0) return num;
                     }
-                    // Try to access game internals
+                    // Method 2: Try Runner object (Chrome dino)
                     if (typeof Runner !== 'undefined' && Runner.instance_) {
-                        return Runner.instance_.distanceRan || 0;
+                        return Math.floor(Runner.instance_.distanceRan) || 0;
                     }
                     return 0;
                 })()
             ''',
             'game_over_js': '''
                 (() => {
-                    // Check for game over screen
-                    const gameOver = document.querySelector('.game-over') ||
-                                    document.querySelector('[class*="game-over"]') ||
-                                    document.querySelector('[class*="gameover"]');
-                    if (gameOver && getComputedStyle(gameOver).display !== 'none') {
-                        return true;
+                    // Method 1: Check for visible game-over elements
+                    const gameOverSelectors = [
+                        '.game-over', '[class*="game-over"]', '[class*="gameover"]',
+                        '.crashed', '[class*="crashed"]', '.ended', '[class*="ended"]',
+                        '#game-over', '.replay', '[class*="replay"]'
+                    ];
+                    for (const sel of gameOverSelectors) {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            const style = getComputedStyle(el);
+                            if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+                                return true;
+                            }
+                        }
                     }
-                    // Try to access game internals
+                    // Method 2: Check Runner object
                     if (typeof Runner !== 'undefined' && Runner.instance_) {
-                        return Runner.instance_.crashed || false;
+                        return Runner.instance_.crashed === true;
                     }
+                    // Method 3: Check if game canvas shows "GAME OVER" text (some versions)
                     return false;
                 })()
             ''',
             'restart_js': '''
                 (() => {
-                    // Try to restart via game internals
+                    // Method 1: Use Runner restart
                     if (typeof Runner !== 'undefined' && Runner.instance_) {
                         Runner.instance_.restart();
                         return true;
                     }
-                    // Click restart button if exists
-                    const restartBtn = document.querySelector('.restart') ||
-                                      document.querySelector('[class*="restart"]');
-                    if (restartBtn) {
-                        restartBtn.click();
+                    // Method 2: Click any restart/replay button
+                    const btns = document.querySelectorAll('.restart, [class*="restart"], .replay, [class*="replay"], .play-again');
+                    for (const btn of btns) {
+                        btn.click();
                         return true;
                     }
                     return false;
@@ -374,6 +457,76 @@ class DinoGameEnv(WebGameEnv):
             frame_skip=2,
             game_config=game_config
         )
+
+        self.last_screenshot = None
+        self.static_frames = 0
+
+    def _is_game_over(self) -> bool:
+        """Check if game is over using JS and visual detection."""
+        # First try JavaScript detection
+        if self.game_over_js:
+            try:
+                result = self.page.evaluate(self.game_over_js)
+                if result:
+                    return True
+            except:
+                pass
+
+        # Visual detection: if screen hasn't changed for several frames, game is likely over
+        # (The dino game freezes on game over)
+        if self.last_screenshot is not None:
+            current = self._get_screenshot()
+            diff = np.mean(np.abs(current.astype(float) - self.last_screenshot.astype(float)))
+            if diff < 1.0:  # Very little change
+                self.static_frames += 1
+                if self.static_frames > 5:  # 5 consecutive static frames = game over
+                    return True
+            else:
+                self.static_frames = 0
+
+        return False
+
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        """Take a step with improved game-over detection."""
+        self.steps += 1
+
+        # Execute action
+        if action > 0 and action <= len(self.action_keys):
+            key = self.action_keys[action - 1]
+            self._press_key(key)
+
+        # Wait for frame(s)
+        time.sleep(0.05 * self.frame_skip)
+
+        # Get new state
+        obs = self._get_screenshot()
+        new_score = self._get_score()
+        game_over = self._is_game_over()
+
+        # Store screenshot for visual detection
+        self.last_screenshot = obs.copy()
+
+        # Calculate reward
+        reward = new_score - self.score  # Reward = score increase
+        if game_over:
+            reward -= 1  # Small penalty for dying
+        else:
+            reward += 0.01  # Small reward for surviving
+
+        self.score = new_score
+
+        info = {
+            "score": self.score,
+            "steps": self.steps
+        }
+
+        return obs, reward, game_over, False, info
+
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
+        """Reset with static frame counter."""
+        self.last_screenshot = None
+        self.static_frames = 0
+        return super().reset(seed=seed, options=options)
 
 
 # Factory function to create environment based on URL
