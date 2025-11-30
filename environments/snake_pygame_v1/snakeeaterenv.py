@@ -280,7 +280,6 @@ class SnakeEaterEnv(gym.Env):
             except Exception:
                 pass  # Skip score display if font fails
 
-        pygame.event.pump()  # Required for window to appear on macOS
         pygame.display.update()
 
         if self.clock:
