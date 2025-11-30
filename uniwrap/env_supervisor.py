@@ -4,15 +4,79 @@ Environment Supervisor - Evaluates environment quality and suggests improvements
 This module provides an AI-powered supervisor that:
 1. Analyzes training results to detect issues
 2. Reviews environment code for common problems
-3. Suggests specific improvements
-4. Can auto-improve with human approval
+3. Browses the game URL to understand how the game works
+4. Suggests specific improvements based on game mechanics
+5. Can auto-improve with human approval
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from uniwrap.llm_client import ClaudeClient
+
+
+def extract_game_url(env_code: str) -> Optional[str]:
+    """Extract game URL from environment code."""
+    # Look for game_url assignment
+    patterns = [
+        r'self\.game_url\s*=\s*["\']([^"\']+)["\']',
+        r'game_url\s*=\s*["\']([^"\']+)["\']',
+        r'url\s*=\s*["\']([^"\']+)["\']',
+        r'goto\(["\']([^"\']+)["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, env_code)
+        if match:
+            url = match.group(1)
+            if url.startswith('http'):
+                return url
+    return None
+
+
+def fetch_game_info(game_url: str) -> Dict[str, Any]:
+    """Fetch and analyze a game page to understand how it works."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        # Fallback without requests/bs4
+        return {"url": game_url, "error": "requests/beautifulsoup not available"}
+
+    try:
+        response = requests.get(game_url, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Extract useful info
+        title = soup.title.string if soup.title else ""
+
+        # Get all text content
+        text_content = soup.get_text(separator=' ', strip=True)[:2000]
+
+        # Look for game instructions
+        instructions = []
+        for tag in soup.find_all(['p', 'div', 'span', 'h1', 'h2', 'h3']):
+            text = tag.get_text(strip=True).lower()
+            if any(word in text for word in ['press', 'click', 'tap', 'space', 'arrow', 'control', 'play', 'start', 'jump', 'dodge', 'avoid']):
+                instructions.append(tag.get_text(strip=True))
+
+        # Check for canvas (likely a game)
+        has_canvas = soup.find('canvas') is not None
+
+        # Check for common game frameworks
+        scripts = [s.get('src', '') for s in soup.find_all('script') if s.get('src')]
+
+        return {
+            "url": game_url,
+            "title": title,
+            "has_canvas": has_canvas,
+            "instructions": instructions[:5],  # Top 5 instruction-like texts
+            "text_preview": text_content[:1000],
+            "scripts": scripts[:5]
+        }
+    except Exception as e:
+        return {"url": game_url, "error": str(e)}
 
 
 EVALUATION_PROMPT = """You are an expert RL environment designer reviewing a generated environment.
@@ -21,6 +85,9 @@ EVALUATION_PROMPT = """You are an expert RL environment designer reviewing a gen
 ```python
 {env_code}
 ```
+
+## Game Information (from browsing the game URL)
+{game_info}
 
 ## Training Results
 - Episodes completed: {episodes}
@@ -34,7 +101,13 @@ EVALUATION_PROMPT = """You are an expert RL environment designer reviewing a gen
 - Average episode length: {avg_length:.1f} steps
 
 ## Your Task
-Analyze this environment and training results. Identify issues and suggest improvements.
+Analyze this environment and training results. Use the GAME INFORMATION to understand:
+1. What the game's objective is (survive, collect, reach goal, etc.)
+2. What controls the game uses (space, arrows, click, etc.)
+3. How scoring works in the actual game
+4. What causes game over
+
+Then identify issues and suggest improvements that align with how the ACTUAL GAME works.
 
 Consider these common problems:
 
@@ -106,6 +179,9 @@ IMPROVEMENT_PROMPT = """You are an expert RL environment designer. Improve this 
 {env_code}
 ```
 
+## Game Information (from browsing the game URL)
+{game_info}
+
 ## Analysis Results
 {analysis}
 
@@ -114,6 +190,12 @@ IMPROVEMENT_PROMPT = """You are an expert RL environment designer. Improve this 
 
 ## Your Task
 Generate an IMPROVED version of this environment that fixes the identified issues.
+
+IMPORTANT: Use the GAME INFORMATION to make your improvements match how the actual game works:
+- If the game says "Hold Space to change direction", the reward should encourage strategic direction changes
+- If the game is about survival/dodging, use survival time as the primary reward signal
+- If the game has a visible score, try to extract it; if not, use survival time as proxy
+- Match the action space to the actual game controls
 
 ### REWARD FUNCTION FIXES:
 1. Fix the reward function to provide meaningful learning signal
@@ -199,6 +281,7 @@ def analyze_environment(
 ) -> Dict[str, Any]:
     """
     Analyze an environment's quality based on its code and training results.
+    Also fetches game info from the URL to understand how the game works.
 
     Args:
         env_code: The environment source code
@@ -223,6 +306,21 @@ def analyze_environment(
             'summary': 'Cannot analyze - no training results provided.'
         }
 
+    # Extract and fetch game info
+    game_url = extract_game_url(env_code)
+    game_info_str = "No game URL found in environment code."
+    if game_url:
+        print(f"   🌐 Fetching game info from: {game_url}")
+        game_info = fetch_game_info(game_url)
+        if 'error' not in game_info:
+            game_info_str = f"""URL: {game_info.get('url', 'N/A')}
+Title: {game_info.get('title', 'N/A')}
+Has Canvas: {game_info.get('has_canvas', False)}
+Game Instructions Found: {json.dumps(game_info.get('instructions', []), indent=2)}
+Page Text Preview: {game_info.get('text_preview', '')[:500]}"""
+        else:
+            game_info_str = f"URL: {game_url}\nError fetching: {game_info.get('error')}"
+
     # Calculate statistics
     avg_reward = float(np.mean(episode_rewards))
     max_reward = float(np.max(episode_rewards))
@@ -235,6 +333,7 @@ def analyze_environment(
 
     prompt = EVALUATION_PROMPT.format(
         env_code=env_code,
+        game_info=game_info_str,
         episodes=len(episode_rewards),
         avg_reward=avg_reward,
         max_reward=max_reward,
@@ -274,6 +373,9 @@ def analyze_environment(
         'improvement': last_10 - first_10 if len(episode_rewards) >= 20 else 0
     }
 
+    # Store game info for use in improvement step
+    analysis['game_info'] = game_info_str
+
     return analysis
 
 
@@ -297,11 +399,16 @@ def improve_environment(
     Returns:
         Dict with 'code' (improved code) and 'changelog' (summary of changes)
     """
-    # Format analysis for prompt
-    analysis_text = json.dumps(analysis, indent=2, default=str)
+    # Get game info from analysis (was fetched during analyze step)
+    game_info_str = analysis.get('game_info', 'No game information available.')
+
+    # Format analysis for prompt (remove game_info to avoid duplication)
+    analysis_copy = {k: v for k, v in analysis.items() if k != 'game_info'}
+    analysis_text = json.dumps(analysis_copy, indent=2, default=str)
 
     prompt = IMPROVEMENT_PROMPT.format(
         env_code=env_code,
+        game_info=game_info_str,
         analysis=analysis_text,
         user_feedback=user_feedback or "No additional feedback."
     )
