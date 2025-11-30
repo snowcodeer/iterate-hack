@@ -43,7 +43,7 @@ class SnakeEaterEnv(gym.Env):
             self.clock = pygame.time.Clock()
             try:
                 self.font = pygame.font.SysFont('consolas', 20)
-            except (NotImplementedError, ImportError):
+            except Exception:
                 self.font = None  # Font not available on Python 3.14
 
         # Colors
@@ -255,7 +255,7 @@ class SnakeEaterEnv(gym.Env):
             self.clock = pygame.time.Clock()
             try:
                 self.font = pygame.font.SysFont('consolas', 20)
-            except (NotImplementedError, ImportError):
+            except Exception:
                 self.font = None
 
         # Fill background
@@ -272,10 +272,13 @@ class SnakeEaterEnv(gym.Env):
 
         # Draw score
         if self.font:
-            score_surface = self.font.render(f'Score : {self.score}', True, self.white)
-            score_rect = score_surface.get_rect()
-            score_rect.midtop = (self.frame_size_x / 10, 15)
-            self.game_window.blit(score_surface, score_rect)
+            try:
+                score_surface = self.font.render(f'Score : {self.score}', True, self.white)
+                score_rect = score_surface.get_rect()
+                score_rect.midtop = (self.frame_size_x / 10, 15)
+                self.game_window.blit(score_surface, score_rect)
+            except Exception:
+                pass  # Skip score display if font fails
 
         pygame.display.update()
 
@@ -286,7 +289,10 @@ class SnakeEaterEnv(gym.Env):
         if self.game_window is None:
             pygame.init()
             self.game_window = pygame.display.set_mode((self.frame_size_x, self.frame_size_y))
-            self.font = pygame.font.SysFont('consolas', 20)
+            try:
+                self.font = pygame.font.SysFont('consolas', 20)
+            except Exception:
+                self.font = None
 
         # Fill background
         self.game_window.fill(self.black)
@@ -302,10 +308,13 @@ class SnakeEaterEnv(gym.Env):
 
         # Draw score
         if self.font:
-            score_surface = self.font.render(f'Score : {self.score}', True, self.white)
-            score_rect = score_surface.get_rect()
-            score_rect.midtop = (self.frame_size_x / 10, 15)
-            self.game_window.blit(score_surface, score_rect)
+            try:
+                score_surface = self.font.render(f'Score : {self.score}', True, self.white)
+                score_rect = score_surface.get_rect()
+                score_rect.midtop = (self.frame_size_x / 10, 15)
+                self.game_window.blit(score_surface, score_rect)
+            except Exception:
+                pass  # Skip score display if font fails
 
         # Convert to RGB array
         return np.transpose(
