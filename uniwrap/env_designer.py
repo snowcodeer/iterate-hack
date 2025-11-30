@@ -446,36 +446,67 @@ IMPORTANT REQUIREMENTS:
 - Handle game reset properly
 - Support both headless (training) and visual (human) render modes
 
-=== CRITICAL: PYGAME FONT HANDLING ===
+=== CRITICAL: PYGAME FONT HANDLING (Python 3.14+) ===
 
-Python 3.14+ has compatibility issues with pygame.font that cause circular import errors.
-You MUST wrap ALL font operations in try/except blocks:
+Python 3.14+ has circular import issues with pygame.font. Use pygame._freetype instead:
 
 ```python
-# In render() method - ALWAYS use this pattern for fonts:
+import os
+
+# Import pygame._freetype BEFORE pygame to avoid circular import
+try:
+    import pygame._freetype as freetype
+    FREETYPE_AVAILABLE = True
+except ImportError:
+    FREETYPE_AVAILABLE = False
+    freetype = None
+
+import pygame
+
+# System font paths
+SYSTEM_FONT_PATHS = [
+    '/System/Library/Fonts/Helvetica.ttc',  # macOS
+    '/System/Library/Fonts/Supplemental/Arial.ttf',  # macOS
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
+    'C:\\\\Windows\\\\Fonts\\\\arial.ttf',  # Windows
+]
+
+def get_system_font_path():
+    for path in SYSTEM_FONT_PATHS:
+        if os.path.exists(path):
+            return path
+    return None
+
+# In render() method:
 def render(self):
     if self.render_mode != "human" or self.screen is None:
         return None
 
-    # Draw game elements first (before any font operations)
     self.screen.fill((0, 0, 0))
     # ... draw game objects ...
 
-    # Font rendering with robust error handling
+    # Font rendering with freetype (works on Python 3.14)
     try:
-        font = pygame.font.Font(None, 36)
-        # render text...
+        if FREETYPE_AVAILABLE:
+            font_path = get_system_font_path()
+            if font_path and freetype:
+                freetype.init()
+                ft_font = freetype.Font(font_path, 36)
+                # freetype.render() returns (surface, rect)
+                text_surf, _ = ft_font.render('Score: 100', pygame.Color('white'))
+                self.screen.blit(text_surf, (10, 10))
+        else:
+            # Fallback for older Python
+            font = pygame.font.Font(None, 36)
+            text = font.render('Score: 100', True, (255, 255, 255))
+            self.screen.blit(text, (10, 10))
     except Exception:
-        try:
-            font = pygame.font.SysFont('arial', 36)
-            # render text...
-        except Exception:
-            pass  # Skip text rendering if fonts unavailable
+        pass  # Skip text if fonts unavailable
 
     pygame.display.flip()
 ```
 
-NEVER let font errors crash the environment. The game should still be playable without text.
+IMPORTANT: Import pygame._freetype BEFORE pygame to avoid circular import errors.
 
 === CRITICAL: CODE CORRECTNESS RULES ===
 
