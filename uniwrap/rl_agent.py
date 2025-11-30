@@ -152,6 +152,16 @@ class RLAgent:
         # Create vectorized environment (use headless mode for training)
         self.env = DummyVecEnv([lambda: self._make_env(render_mode=None)])
 
+        # Auto-detect the correct policy based on observation space
+        from gymnasium import spaces
+        obs_space = self.env.observation_space
+        if isinstance(obs_space, spaces.Dict):
+            policy = "MultiInputPolicy"
+        elif isinstance(obs_space, spaces.Box) and len(obs_space.shape) == 3:
+            policy = "CnnPolicy"
+        else:
+            policy = "MlpPolicy"
+
         # Create or continue PPO model
         if continue_training and self.model is not None:
             # Continue training existing model - just set the new environment
@@ -159,7 +169,7 @@ class RLAgent:
         else:
             # Create new PPO model
             self.model = PPO(
-                "MlpPolicy",
+                policy,
                 self.env,
                 verbose=0,
                 learning_rate=3e-4,
