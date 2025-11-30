@@ -532,10 +532,19 @@ class AgentOrchestrator:
         self.log(f"   Has Canvas: {self.game_info.get('has_canvas', False)}")
         self.log(f"   Instructions found: {len(self.game_info.get('instructions', []))}")
 
-        # Determine game type
+        # Determine game type - check if it's a GitHub repo (likely pygame)
         game_type = "web"
-        if "github.com" in game_url and "pygame" in game_url.lower():
-            game_type = "pygame"
+        if "github.com" in game_url:
+            # GitHub repos are typically pygame games
+            # Check page content for pygame indicators
+            text_preview = self.game_info.get('text_preview', '').lower()
+            title = self.game_info.get('title', '').lower()
+            if 'pygame' in text_preview or 'pygame' in title or 'pygame' in game_url.lower():
+                game_type = "pygame"
+            elif any(kw in text_preview for kw in ['python game', 'space invaders', 'snake game', 'tetris']):
+                game_type = "pygame"  # Likely a pygame game even if not explicitly stated
+
+        self.log(f"   Game Type: {game_type}")
 
         # Step 2: Generator creates initial environment
         self.log(f"\n[Phase 2] Generator Agent - Creating Environment")

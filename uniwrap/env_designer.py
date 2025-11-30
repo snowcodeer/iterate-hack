@@ -803,10 +803,92 @@ def generate_environment_code(
         Complete Python environment code
     """
     import json
+    import tempfile
+    import subprocess
+    from pathlib import Path
 
-    # Format game info as page_info string
-    page_info = f"""
-URL: {game_info.get('url', 'Unknown')}
+    url = game_info.get('url', '')
+
+    # Check if this is a GitHub pygame repo
+    is_github = 'github.com' in url.lower()
+
+    if game_type == "pygame" and is_github:
+        # Clone the repo and extract pygame code
+        temp_dir = tempfile.mkdtemp(prefix='uniwrap_')
+        try:
+            subprocess.run(['git', 'clone', url, temp_dir], check=True, capture_output=True, timeout=60)
+
+            # Find pygame files
+            repo_path = Path(temp_dir)
+            py_files = list(repo_path.glob('**/*.py'))
+
+            # Look for main game file
+            game_code = ""
+            main_file = None
+
+            # Priority: main.py, game.py, or file with pygame.init
+            for candidate in ['main.py', 'game.py', 'space_invaders.py', 'snake.py']:
+                for f in py_files:
+                    if f.name.lower() == candidate:
+                        main_file = f
+                        break
+                if main_file:
+                    break
+
+            # If not found, look for file with pygame.init
+            if not main_file:
+                for f in py_files:
+                    try:
+                        content = f.read_text()
+                        if 'pygame.init' in content or 'pygame.display' in content:
+                            main_file = f
+                            break
+                    except:
+                        continue
+
+            if main_file:
+                game_code = main_file.read_text()
+
+            # Build repo summary from game info
+            repo_summary = f"""
+Repository: {url}
+Title: {game_info.get('title', 'Unknown')}
+
+Instructions/Description:
+{json.dumps(game_info.get('instructions', []), indent=2)}
+
+Text from README:
+{game_info.get('text_preview', '')[:2000]}
+
+User hints: {hints}
+"""
+
+            if game_code:
+                return generate_pygame_env_code(
+                    game_code=game_code,
+                    repo_summary=repo_summary,
+                    model=model,
+                    api_key=api_key
+                )
+            else:
+                raise ValueError("Could not find pygame game code in repository")
+
+        except subprocess.TimeoutExpired:
+            raise ValueError("Git clone timed out")
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"Git clone failed: {e}")
+        finally:
+            # Cleanup
+            import shutil
+            try:
+                shutil.rmtree(temp_dir)
+            except:
+                pass
+
+    else:
+        # Web game - format page info
+        page_info = f"""
+URL: {url}
 Title: {game_info.get('title', 'Unknown')}
 Has Canvas: {game_info.get('has_canvas', False)}
 Canvas IDs: {game_info.get('canvas_ids', [])}
@@ -821,18 +903,8 @@ Inline Script Preview:
 {game_info.get('inline_scripts_preview', '')[:1000]}
 """
 
-    if game_type == "pygame":
-        # For pygame, we need the actual code - for now, use web game approach
-        # with pygame-specific prompt
-        return generate_pygame_env_code(
-            code_files={},  # Would need actual code
-            main_file="game.py",
-            model=model,
-            api_key=api_key
-        )
-    else:
         return generate_web_game_env_code(
-            game_url=game_info.get('url', ''),
+            game_url=url,
             page_info=page_info,
             model=model,
             api_key=api_key,
