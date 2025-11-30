@@ -1213,16 +1213,26 @@ def main():
                             feedback = input("\nAny specific feedback or requirements? (Enter to skip): ").strip()
 
                             print("\n🔧 Generating improved environment...")
-                            improved_code = improve_environment(
+                            result = improve_environment(
                                 env_code=env_code,
                                 analysis=analysis,
                                 user_feedback=feedback
                             )
+                            improved_code = result['code']
+                            changelog = result['changelog']
+
+                            # Show changelog
+                            print("\n" + "=" * 60)
+                            print("📋 CHANGES MADE:")
+                            print("=" * 60)
+                            if changelog:
+                                print(changelog)
+                            else:
+                                print("(No changelog provided)")
+                            print("=" * 60)
 
                             # Show diff summary
-                            print("\n📝 Improvements generated!")
-                            print(f"   Original: {len(env_code)} chars")
-                            print(f"   Improved: {len(improved_code)} chars")
+                            print(f"\n📝 Code size: {len(env_code)} → {len(improved_code)} chars")
 
                             # Ask to save
                             print("\nOptions:")
@@ -1245,16 +1255,12 @@ def main():
                                 new_file = new_env_path / env_file.name
                                 new_file.write_text(improved_code)
 
-                                # Write __init__.py
+                                # Write __init__.py for the new env
                                 init_content = env_path.joinpath('__init__.py').read_text()
                                 (new_env_path / '__init__.py').write_text(
                                     init_content.replace(env_name, new_env_name)
                                 )
-
-                                # Update top-level __init__.py
-                                top_init = Path('environments/__init__.py')
-                                with open(top_init, 'a') as f:
-                                    f.write(f"from . import {new_env_name}\n")
+                                # Note: top-level __init__.py uses auto-discovery, no update needed
 
                                 print(f"\n\033[92m✅ Saved as: {new_env_name}\033[0m")
                                 print(f"   Path: {new_env_path}")

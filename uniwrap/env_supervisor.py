@@ -169,7 +169,26 @@ If the analysis mentions short episodes or premature termination, fix _is_game_o
 - Add comments explaining reward logic and game over detection
 - Make rewards scale between -1.0 and +1.0 approximately
 
-Output ONLY the complete improved Python code. No explanations, no markdown, just the code."""
+## OUTPUT FORMAT
+Output your response in TWO sections:
+
+1. First, a brief CHANGELOG section listing what you changed and why (3-10 bullet points)
+2. Then the complete improved Python code
+
+Format:
+```
+=== CHANGELOG ===
+- [REWARD] Added intermediate reward for X because Y
+- [GAME_OVER] Increased frame threshold from 8 to 30 to prevent false positives
+- [GAME_OVER] Added grace period to skip checks during first 30 steps
+- [FIX] Removed unreliable red pixel detection
+...
+
+=== CODE ===
+<complete python code here>
+```
+
+Be specific about what you changed and why. The user wants to understand your improvements."""
 
 
 def analyze_environment(
@@ -264,7 +283,7 @@ def improve_environment(
     user_feedback: str = "",
     model: str = "claude-sonnet-4-5-20250929",
     api_key: str = None
-) -> str:
+) -> Dict[str, str]:
     """
     Generate improved environment code based on analysis.
 
@@ -276,7 +295,7 @@ def improve_environment(
         api_key: Optional API key
 
     Returns:
-        Improved environment code as string
+        Dict with 'code' (improved code) and 'changelog' (summary of changes)
     """
     # Format analysis for prompt
     analysis_text = json.dumps(analysis, indent=2, default=str)
@@ -290,8 +309,24 @@ def improve_environment(
     client = ClaudeClient(api_key=api_key)
     response = client.call_claude(prompt, model=model)
 
-    # Clean up response
+    # Parse changelog and code sections
+    changelog = ""
     code = response.strip()
+
+    # Try to extract changelog
+    if "=== CHANGELOG ===" in response:
+        parts = response.split("=== CODE ===")
+        if len(parts) >= 2:
+            changelog_part = parts[0]
+            code_part = parts[1]
+
+            # Extract changelog content
+            if "=== CHANGELOG ===" in changelog_part:
+                changelog = changelog_part.split("=== CHANGELOG ===")[1].strip()
+
+            code = code_part.strip()
+
+    # Clean up code
     if code.startswith("```python"):
         code = code[9:]
     elif code.startswith("```"):
@@ -299,7 +334,10 @@ def improve_environment(
     if code.endswith("```"):
         code = code[:-3]
 
-    return code.strip()
+    return {
+        'code': code.strip(),
+        'changelog': changelog
+    }
 
 
 def quick_reward_check(episode_rewards: List[float], episode_lengths: List[int] = None) -> Dict[str, Any]:
