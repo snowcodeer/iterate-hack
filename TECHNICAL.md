@@ -38,11 +38,47 @@ Generates Gymnasium environments from game URLs using Claude AI.
 1. Fetch game page info (title, canvas elements, instructions)
 2. Send to Claude with specialized prompts
 3. Claude generates complete `gym.Env` subclass
-4. Save to `environments/<game_name>/`
+4. **Validate and auto-fix** generated code
+5. Save to `environments/<game_name>/`
 
 **Key Prompts:**
 - `WEB_GAME_PROMPT`: Guidance for web game wrapping (Playwright, canvas detection, game over detection)
 - `PYGAME_CODE_PROMPT`: Guidance for pygame embedding (font handling, render modes)
+
+**Code Validation Pipeline:**
+```python
+# 1. Generate code from Claude
+code = client.call_claude(prompt)
+
+# 2. Auto-fix common issues (e.g., missing self. prefix)
+code = fix_common_code_issues(code)
+
+# 3. Validate syntax using AST
+is_valid, error = validate_python_code(code)
+if not is_valid:
+    print(f"⚠️ Syntax error: {error}")
+```
+
+**Auto-Fix Function:**
+```python
+def fix_common_code_issues(code: str) -> str:
+    # Find all self.VARNAME definitions
+    defined_vars = re.findall(r'self\.([A-Z_]+)\s*=', code)
+
+    # Fix missing self. prefix for uppercase instance variables
+    # e.g., TILE -> self.TILE when self.TILE is defined
+    for var in defined_vars:
+        pattern = rf'(?<!self\.)({var})(?![a-zA-Z_])'
+        # Replace with self.VAR if not already prefixed
+```
+
+**Prompt Engineering for Code Correctness:**
+The prompts include explicit rules to prevent common bugs:
+- Always use `self.` prefix for instance variables
+- Define variables before using them
+- All methods must have `self` as first parameter
+- Import all modules used
+- Consistent variable naming
 
 ### 2. RL Agent (`uniwrap/rl_agent.py`)
 
