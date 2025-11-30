@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import importlib
+import subprocess
 from pathlib import Path
 
 # Add venv site-packages
@@ -25,6 +26,48 @@ except ImportError:
 # Load env vars
 from dotenv import load_dotenv
 load_dotenv()
+
+
+def initialize_project():
+    """Initialize required directories and dependencies on first run."""
+    project_root = Path(__file__).parent
+
+    # Create required directories
+    required_dirs = ['models', 'training_graphs', 'evals', 'environments']
+    for dir_name in required_dirs:
+        dir_path = project_root / dir_name
+        if not dir_path.exists():
+            dir_path.mkdir(parents=True, exist_ok=True)
+            print(f"   Created {dir_name}/ directory")
+
+    # Check for environments/__init__.py
+    env_init = project_root / 'environments' / '__init__.py'
+    if not env_init.exists():
+        env_init.write_text('# Auto-generated\n')
+
+    # Check if Playwright browsers are installed
+    try:
+        from playwright.sync_api import sync_playwright
+        # Quick check if chromium is installed
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(headless=True)
+            browser.close()
+        except Exception:
+            print("\n⚠️  Playwright browsers not installed. Installing...")
+            subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'],
+                         check=True, capture_output=True)
+            print("   ✓ Playwright chromium installed")
+        finally:
+            pw.stop()
+    except ImportError:
+        pass  # Playwright not installed, will fail later with better error
+    except Exception:
+        pass  # Don't block startup on playwright check
+
+
+# Run initialization on import
+initialize_project()
 
 
 def clear_screen():

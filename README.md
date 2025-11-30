@@ -15,16 +15,23 @@ UniWrap automatically generates Gymnasium RL environments from web games and pyg
 
 ## Installation
 
-1. Install dependencies:
+1. Clone the repository:
 ```bash
-pip install -r requirements.txt
-playwright install chromium
+git clone https://github.com/snowcodeer/iterate-hack.git
+cd iterate-hack
 ```
 
-2. Set your Anthropic API key:
+2. Create virtual environment and install dependencies:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+3. Set your Anthropic API key:
 ```bash
 cp .env.example .env
-# Edit .env and add your API key
+# Edit .env and add your API key: ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ## Quick Start
@@ -33,6 +40,10 @@ Run the interactive CLI:
 ```bash
 python cli_app.py
 ```
+
+On first run, the CLI will automatically:
+- Create required directories (`models/`, `training_graphs/`, etc.)
+- Install Playwright browsers if needed for web game support
 
 ## CLI Options
 
