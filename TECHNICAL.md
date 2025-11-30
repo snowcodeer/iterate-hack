@@ -243,51 +243,14 @@ if terminated:
 
 ## Pygame Environments
 
-### Font Handling (Python 3.14+ Compatibility)
+### How Pygame Environments Work
 
-Python 3.14 has circular import issues with `pygame.font`. The solution is to use `pygame._freetype` instead:
+Pygame environments embed game logic directly rather than controlling an external game:
 
-```python
-import os
-
-# Import pygame._freetype BEFORE pygame to avoid circular import
-try:
-    import pygame._freetype as freetype
-    FREETYPE_AVAILABLE = True
-except ImportError:
-    FREETYPE_AVAILABLE = False
-    freetype = None
-
-import pygame
-
-# System font paths (cross-platform)
-SYSTEM_FONT_PATHS = [
-    '/System/Library/Fonts/Helvetica.ttc',  # macOS
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
-    'C:\\Windows\\Fonts\\arial.ttf',  # Windows
-]
-
-def get_system_font_path():
-    for path in SYSTEM_FONT_PATHS:
-        if os.path.exists(path):
-            return path
-    return None
-
-# In render():
-if FREETYPE_AVAILABLE:
-    font_path = get_system_font_path()
-    if font_path:
-        freetype.init()
-        ft_font = freetype.Font(font_path, 36)
-        # freetype.render() returns (surface, rect)
-        text_surf, _ = ft_font.render('Score: 100', pygame.Color('white'))
-        screen.blit(text_surf, (10, 10))
-```
-
-**Key Points:**
-- Import `pygame._freetype` BEFORE `pygame` to avoid circular import
-- Use system font files directly (not font names)
-- `freetype.render()` returns `(surface, rect)` tuple, not just surface
+1. **Game State**: All game variables (positions, scores, etc.) are stored as instance variables
+2. **Step Function**: Executes one game tick, applying the action and updating state
+3. **Observations**: Can be either raw game state arrays or rendered screenshots
+4. **Rendering**: Uses pygame surfaces for visual display in "human" mode
 
 ### Render Modes
 
