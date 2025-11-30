@@ -779,3 +779,62 @@ IMPORTANT: Pay close attention to the user's hints above. They have tested this 
 
     return code
 
+
+
+def generate_environment_code(
+    game_info: Dict,
+    game_type: str = "web",
+    hints: str = "",
+    model: str = "claude-sonnet-4-5-20250929",
+    api_key: str = None
+) -> str:
+    """
+    Unified function to generate environment code from game info.
+    Used by the agent orchestrator.
+
+    Args:
+        game_info: Dict with game information from browsing
+        game_type: "web" or "pygame"
+        hints: Additional user hints
+        model: Claude model to use
+        api_key: Optional API key
+
+    Returns:
+        Complete Python environment code
+    """
+    import json
+
+    # Format game info as page_info string
+    page_info = f"""
+URL: {game_info.get('url', 'Unknown')}
+Title: {game_info.get('title', 'Unknown')}
+Has Canvas: {game_info.get('has_canvas', False)}
+Canvas IDs: {game_info.get('canvas_ids', [])}
+
+Instructions Found:
+{json.dumps(game_info.get('instructions', []), indent=2)}
+
+Page Text Preview:
+{game_info.get('text_preview', '')[:1500]}
+
+Inline Script Preview:
+{game_info.get('inline_scripts_preview', '')[:1000]}
+"""
+
+    if game_type == "pygame":
+        # For pygame, we need the actual code - for now, use web game approach
+        # with pygame-specific prompt
+        return generate_pygame_env_code(
+            code_files={},  # Would need actual code
+            main_file="game.py",
+            model=model,
+            api_key=api_key
+        )
+    else:
+        return generate_web_game_env_code(
+            game_url=game_info.get('url', ''),
+            page_info=page_info,
+            model=model,
+            api_key=api_key,
+            extra_context=hints
+        )

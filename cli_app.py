@@ -91,6 +91,7 @@ def print_menu(visual_mode: bool):
     print("  6. Evaluate & generate graphs")
     print("  7. Analyze & improve environment (AI supervisor)")
     print("  8. Delete environment")
+    print("  \033[95m9. Autonomous Agent Mode (NEW!)\033[0m")
     visual_status = "\033[92mON\033[0m" if visual_mode else "\033[91mOFF\033[0m"
     print(f"  v. Toggle visual mode [{visual_status}]")
     print("  q. Quit")
@@ -1593,6 +1594,50 @@ CHANGES MADE:
 
             except (ValueError, IndexError):
                 print("\033[91mInvalid selection.\033[0m")
+
+            input("\nPress Enter to continue...")
+
+        elif choice == '9':
+            # Autonomous agent mode
+            print("\n\033[95m" + "=" * 60 + "\033[0m")
+            print("\033[95m  AUTONOMOUS AGENT MODE\033[0m")
+            print("\033[95m" + "=" * 60 + "\033[0m")
+            print("\nTwo AI agents will work together:")
+            print("  \033[94mAgent 1 (Generator)\033[0m: Analyzes game, generates environment")
+            print("  \033[94mAgent 2 (Supervisor)\033[0m: Tests, analyzes, requests improvements")
+            print("\nThe agents will iterate until quality >= 7/10 or max 5 iterations.")
+
+            game_url = input("\nEnter game URL: ").strip()
+            if not game_url:
+                print("\033[91mNo URL provided.\033[0m")
+                input("\nPress Enter to continue...")
+                continue
+
+            hints = input("Any hints for the AI? (controls, objective, etc.) [optional]: ").strip()
+
+            print("\n\033[93mStarting agent orchestration...\033[0m\n")
+
+            try:
+                from uniwrap.agents import run_agents
+
+                result = run_agents(game_url, hints)
+
+                if result['success']:
+                    print(f"\n\033[92m✅ Agents completed successfully!\033[0m")
+                    print(f"   Environment: {result['env_name']}")
+                    print(f"   Quality Score: {result['quality_score']}/10")
+                    print(f"   Iterations: {result['iterations']}")
+
+                    # Refresh env list
+                    envs = list_environments()
+                    last_env = result['env_name']
+                else:
+                    print(f"\n\033[91m❌ Agent orchestration failed: {result.get('error', 'Unknown error')}\033[0m")
+
+            except Exception as e:
+                print(f"\n\033[91m❌ Error: {e}\033[0m")
+                import traceback
+                traceback.print_exc()
 
             input("\nPress Enter to continue...")
 
