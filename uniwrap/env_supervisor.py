@@ -334,8 +334,25 @@ def improve_environment(
     if code.endswith("```"):
         code = code[:-3]
 
+    code = code.strip()
+
+    # Add header comment with changelog if we have one
+    if changelog:
+        header = f'''"""
+Environment improved by AI Supervisor
+=====================================
+
+CHANGES MADE:
+{changelog}
+"""
+
+'''
+        # Only add header if code doesn't already have a docstring
+        if not code.startswith('"""') and not code.startswith("'''"):
+            code = header + code
+
     return {
-        'code': code.strip(),
+        'code': code,
         'changelog': changelog
     }
 
