@@ -369,12 +369,14 @@ Page HTML preview (first 5000 chars):
         return None
 
 
-def test_environment(env_name: str, episodes: int = 5, use_trained: bool = False, visual: bool = True):
+def test_environment(env_name: str, episodes: int = 5, use_trained: bool = False, visual: bool = True, model_path=None):
     """Test an environment with random or trained agent."""
     print(f"\n\033[94mTesting environment: {env_name}\033[0m")
     print(f"Agent: {'Trained PPO' if use_trained else 'Random'}")
     print(f"Episodes: {episodes}")
     print(f"Visual: {visual}")
+    if model_path:
+        print(f"Model: {model_path.name if hasattr(model_path, 'name') else model_path}")
     print()
 
     try:
@@ -427,15 +429,17 @@ def test_environment(env_name: str, episodes: int = 5, use_trained: bool = False
         # Load trained agent if requested
         agent = None
         if use_trained:
-            from uniwrap.rl_agent import RLAgent, get_model_path
-            model_path = get_model_path(env_name)
-            if not model_path.exists():
-                print(f"\033[91m❌ No trained model found at {model_path}\033[0m")
+            from uniwrap.rl_agent import RLAgent, get_model_path, get_latest_model_path
+            # Use provided model_path, or find the latest
+            if model_path is None:
+                model_path = get_latest_model_path(env_name)
+            if model_path is None or not model_path.exists():
+                print(f"\033[91m❌ No trained model found for {env_name}\033[0m")
                 print("Train the agent first with option 4.")
                 return
             agent = RLAgent(env_class)
             agent.load(model_path)
-            print(f"Loaded model from: {model_path}")
+            print(f"Loaded model: {model_path.name}")
 
         # Determine render mode
         if visual:
@@ -526,12 +530,30 @@ def test_environment(env_name: str, episodes: int = 5, use_trained: bool = False
 
 
 def train_agent(env_name: str, timesteps: int = 10000, visual: bool = False, continue_training: bool = False):
-    """Train an RL agent on an environment."""
+    """Train an RL agent on an environment with live progress graph."""
     print(f"\n\033[94mTraining agent on: {env_name}\033[0m")
     print(f"Timesteps: {timesteps:,}")
     print(f"Visual: {visual}")
     print(f"Continue training: {continue_training}")
     print()
+
+    # Try to set up live plotting (may fail on some systems)
+    live_plot_available = False
+    try:
+        import matplotlib
+        # Try TkAgg first, fall back to other interactive backends
+        for backend in ['TkAgg', 'Qt5Agg', 'MacOSX', 'GTK3Agg']:
+            try:
+                matplotlib.use(backend)
+                break
+            except:
+                continue
+        import matplotlib.pyplot as plt
+        import numpy as np
+        live_plot_available = True
+    except Exception as e:
+        print(f"   Note: Live plotting unavailable ({e})")
+        plt = None
 
     try:
         from uniwrap.rl_agent import train_agent as do_train, get_latest_model_path, get_model_path
@@ -608,15 +630,92 @@ def train_agent(env_name: str, timesteps: int = 10000, visual: bool = False, con
 
         print("Initializing PPO agent...")
 
-        # Progress callback
+        # Set up live plotting if available
+        fig = ax1 = ax2 = None
+        episode_rewards_live = []
+        episode_lengths_live = []
+        reward_line = avg_line = length_line = None
+
+        if live_plot_available and plt is not None:
+            try:
+                plt.ion()  # Enable interactive mode
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+                fig.suptitle(f'Training Progress: {env_name}', fontsize=12, fontweight='bold')
+
+                # Episode rewards plot
+                ax1.set_xlabel('Episode')
+                ax1.set_ylabel('Reward')
+                ax1.set_title('Episode Rewards')
+                ax1.grid(True, alpha=0.3)
+                reward_line, = ax1.plot([], [], 'b-', alpha=0.6, label='Episode Reward')
+                avg_line, = ax1.plot([], [], 'r-', linewidth=2, label='Moving Avg (10)')
+                ax1.legend(loc='upper left')
+
+                # Episode lengths plot
+                ax2.set_xlabel('Episode')
+                ax2.set_ylabel('Steps')
+                ax2.set_title('Episode Length (Survival)')
+                ax2.grid(True, alpha=0.3)
+                length_line, = ax2.plot([], [], 'g-', alpha=0.6, label='Episode Length')
+                ax2.legend(loc='upper left')
+
+                plt.tight_layout()
+                plt.show(block=False)
+                plt.pause(0.1)
+                print("   📊 Live training graph opened")
+            except Exception as e:
+                print(f"   Note: Could not open live plot: {e}")
+                fig = None
+
+        # Progress callback with live plotting
         def progress(data):
+            nonlocal episode_rewards_live, episode_lengths_live
             if data['type'] == 'episode_complete':
                 ep = data['episode']
                 r = data['reward']
                 avg = data['avg_reward']
+                length = data['length']
                 ts = data['total_timesteps']
                 pct = (ts / timesteps) * 100
-                print(f"  Episode {ep:3d} | Reward: {r:7.1f} | Avg(10): {avg:7.1f} | Progress: {pct:5.1f}%")
+                print(f"  Episode {ep:3d} | Reward: {r:7.1f} | Avg(10): {avg:7.1f} | Steps: {length:4d} | Progress: {pct:5.1f}%")
+
+                # Update live plot data
+                episode_rewards_live.append(r)
+                episode_lengths_live.append(length)
+
+                # Update live plot if available
+                if fig is not None and reward_line is not None:
+                    try:
+                        episodes = list(range(1, len(episode_rewards_live) + 1))
+
+                        # Update reward plot
+                        reward_line.set_data(episodes, episode_rewards_live)
+
+                        # Compute and plot moving average
+                        if len(episode_rewards_live) >= 2:
+                            window = min(10, len(episode_rewards_live))
+                            moving_avg = []
+                            for i in range(len(episode_rewards_live)):
+                                start = max(0, i - window + 1)
+                                moving_avg.append(np.mean(episode_rewards_live[start:i+1]))
+                            avg_line.set_data(episodes, moving_avg)
+
+                        # Update length plot
+                        length_line.set_data(episodes, episode_lengths_live)
+
+                        # Rescale axes
+                        ax1.relim()
+                        ax1.autoscale_view()
+                        ax2.relim()
+                        ax2.autoscale_view()
+
+                        # Refresh the figure
+                        fig.canvas.draw_idle()
+                        fig.canvas.flush_events()
+                        plt.pause(0.01)
+                    except Exception:
+                        pass  # Ignore plot update errors
+
             elif data['type'] == 'training_start':
                 print("Training started...")
             elif data['type'] == 'training_frame':
@@ -640,7 +739,30 @@ def train_agent(env_name: str, timesteps: int = 10000, visual: bool = False, con
         if results.get('continued_from'):
             print(f"   Continued from: {results['continued_from']}")
 
-        # Generate training graphs
+        # Save live plot as PNG if it was created
+        if fig is not None and plt is not None:
+            try:
+                plt.ioff()  # Disable interactive mode
+                ax1.set_title(f'Episode Rewards (Final Avg: {results["avg_reward"]:.1f})')
+                ax2.set_title(f'Episode Length (Avg: {results.get("avg_length", 0):.1f} steps)')
+                fig.suptitle(f'Training Complete: {env_name} ({results["episodes_completed"]} episodes)',
+                             fontsize=12, fontweight='bold')
+                fig.canvas.draw()
+
+                live_graph_dir = Path("training_graphs")
+                live_graph_dir.mkdir(exist_ok=True)
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                live_graph_path = live_graph_dir / f"{env_name}_live_{timestamp}.png"
+                fig.savefig(live_graph_path, dpi=150, bbox_inches='tight')
+                print(f"   Live graph saved: {live_graph_path}")
+
+                # Close the live plot window
+                plt.close(fig)
+            except Exception as e:
+                print(f"   Note: Could not save live graph: {e}")
+
+        # Generate detailed training graphs
         if results.get('episode_rewards'):
             from uniwrap.rl_agent import generate_training_graphs
             graph_path = generate_training_graphs(
@@ -649,8 +771,8 @@ def train_agent(env_name: str, timesteps: int = 10000, visual: bool = False, con
                 env_name=env_name
             )
             if graph_path:
-                print(f"   Training graph: {graph_path}")
-                # Try to open the graph
+                print(f"   Detailed graph: {graph_path}")
+                # Try to open the detailed graph
                 try:
                     import subprocess
                     subprocess.run(['open', str(graph_path)], check=False)
@@ -661,6 +783,11 @@ def train_agent(env_name: str, timesteps: int = 10000, visual: bool = False, con
         print(f"\n\033[91m❌ Error: {e}\033[0m")
         import traceback
         traceback.print_exc()
+        # Try to close plot if it was opened
+        try:
+            plt.close('all')
+        except:
+            pass
 
 
 def evaluate_agent(env_name: str, episodes: int = 20):
@@ -997,20 +1124,22 @@ def main():
                         print(f"\n\033[93mExisting models found:\033[0m")
                         for v in versions:
                             meta = v.get('metadata')
-                            obs_info = ""
-                            if meta and meta.get('observation_shape'):
-                                obs_info = f" [obs: {meta['observation_shape']}]"
-                            print(f"  v{v['version']}: {v['path'].name} ({v['size_kb']:.1f} KB){obs_info}")
+                            timesteps = meta.get('total_timesteps', '?') if meta else '?'
+                            trained_at = meta.get('trained_at', '')[:10] if meta else ''
+                            continued = f" (from v{meta.get('continued_from', '').split('_v')[-1].split('.')[0]})" if meta and meta.get('continued_from') else ""
+                            print(f"  v{v['version']}: {timesteps} steps @ {trained_at}{continued}")
 
                         print("\nTraining mode:")
-                        print("  1. Start fresh (new model)")
-                        print("  2. Continue training (from latest)")
+                        print("  1. Start fresh (creates new version)")
+                        print("  2. Continue from latest (loads weights, saves as new version)")
                         print("  b. Back")
                         mode = input("Select [1]: ").strip().lower() or "1"
                         if mode == 'b':
                             continue
                         elif mode == '2':
                             continue_training = True
+                            print(f"\n   Will load: {versions[-1]['path'].name}")
+                            print(f"   Will save as: new version (v{versions[-1]['version'] + 1})")
 
                     print("\nTraining steps:")
                     print("  1. 5,000 (quick test)")
@@ -1040,7 +1169,7 @@ def main():
                 continue
 
             # Filter to only trained envs
-            from uniwrap.rl_agent import get_model_path
+            from uniwrap.rl_agent import get_model_path, list_model_versions, load_model_metadata
             trained_envs = [(n, c) for n, c in envs if get_model_path(n).exists()]
 
             if not trained_envs:
@@ -1050,7 +1179,15 @@ def main():
 
             print("\nTrained environments:")
             for i, (name, cls) in enumerate(trained_envs, 1):
-                print(f"  {i}. {name} ({cls})")
+                versions = list_model_versions(name)
+                version_count = len(versions)
+                latest = versions[-1] if versions else None
+                if latest and latest.get('metadata'):
+                    trained_at = latest['metadata'].get('trained_at', 'unknown')[:10]
+                    timesteps = latest['metadata'].get('total_timesteps', '?')
+                    print(f"  {i}. {name} ({cls}) - {version_count} model(s), latest: {timesteps} steps @ {trained_at}")
+                else:
+                    print(f"  {i}. {name} ({cls}) - {version_count} model(s)")
             print("  b. Back to main menu")
 
             selection = input("\nSelect environment (number or 'b'): ").strip().lower()
@@ -1061,8 +1198,32 @@ def main():
                 idx = int(selection) - 1
                 if 0 <= idx < len(trained_envs):
                     env_name = trained_envs[idx][0]
+
+                    # Show available model versions and let user pick
+                    versions = list_model_versions(env_name)
+                    if len(versions) > 1:
+                        print(f"\n\033[93mMultiple models available for {env_name}:\033[0m")
+                        for i, v in enumerate(versions, 1):
+                            meta = v.get('metadata', {})
+                            timesteps = meta.get('total_timesteps', '?')
+                            trained_at = meta.get('trained_at', 'unknown')[:16].replace('T', ' ')
+                            obs_shape = meta.get('observation_shape', '?')
+                            print(f"  {i}. v{v['version']}: {v['path'].name} ({v['size_kb']:.0f}KB)")
+                            print(f"     Trained: {trained_at} | Steps: {timesteps} | Obs: {obs_shape}")
+
+                        model_choice = input(f"\nSelect model version [1-{len(versions)}] or Enter for latest: ").strip()
+                        if model_choice:
+                            model_idx = int(model_choice) - 1
+                            selected_model = versions[model_idx]['path']
+                        else:
+                            selected_model = versions[-1]['path']  # Latest
+                        print(f"\n   Using model: {selected_model.name}")
+                    else:
+                        selected_model = versions[0]['path'] if versions else None
+
                     episodes = int(input("Number of episodes [3]: ") or "3")
-                    test_environment(env_name, episodes=episodes, use_trained=True, visual=visual_mode)
+                    test_environment(env_name, episodes=episodes, use_trained=True, visual=visual_mode,
+                                   model_path=selected_model)
                     last_env = env_name
             except (ValueError, IndexError):
                 print("\033[91mInvalid selection.\033[0m")

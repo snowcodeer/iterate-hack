@@ -106,6 +106,13 @@ else:
 - Metadata: `models/<env_name>_ppo.json`
 - Training graphs: `training_graphs/<env_name>_training_*.png`
 
+**Live Training Visualization:**
+During training, a matplotlib window opens showing real-time progress:
+- Episode rewards with moving average (10 episodes)
+- Episode lengths (survival time)
+- Auto-scaling axes as training progresses
+- Graph is saved as `training_graphs/<env_name>_live_*.png` when training completes
+
 ### 3. AI Supervisor (`uniwrap/env_supervisor.py`)
 
 Analyzes and improves environments automatically.
