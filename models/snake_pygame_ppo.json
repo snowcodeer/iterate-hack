@@ -1,0 +1,12 @@
+{
+  "env_name": "snake_pygame",
+  "env_file_hash": "8a93cc8a55c4",
+  "observation_shape": [
+    11
+  ],
+  "action_space_n": 4,
+  "total_timesteps": 10000,
+  "continued_from": null,
+  "trained_at": "2025-11-30T01:31:06.110301",
+  "model_file": "snake_pygame_ppo.zip"
+}

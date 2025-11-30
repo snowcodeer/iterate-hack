@@ -66,46 +66,214 @@ You must create a COMPLETE, WORKING Gymnasium environment that:
 4. Calculates rewards based on survival time, score increase, etc.
 5. RELIABLY detects game over conditions
 
-CRITICAL REQUIREMENTS FOR GAME OVER DETECTION:
-- Many games don't expose game state via JavaScript
-- Use VISUAL DETECTION as the PRIMARY method:
-  - Compare consecutive screenshots - if they're nearly identical for 5+ frames, the game is likely over
-  - Look for dramatic color changes (red flash, game over screen)
-  - Track if the game elements stop moving
-- As BACKUP, try JavaScript/DOM detection:
-  - Look for game over elements: '.game-over', '.crashed', '.restart', '[class*="game-over"]'
-  - Try accessing game internals if available (Runner.instance_.crashed for Chrome Dino)
-- ALWAYS implement visual detection as fallback
+=== CRITICAL: IDENTIFYING THE GAME ELEMENT ===
 
-SCREENSHOT AND OBSERVATION:
-- Use page.screenshot(clip={{...}}) to capture just the game canvas/area
-- Find the canvas/game element bounding box first
-- Use a reasonable resolution (300-600px width) - not too small (hard to see), not too large (slow)
+Web game pages often have many elements (ads, menus, navigation, social buttons). You MUST identify the ACTUAL GAME:
+
+1. LOOK FOR THE GAME CANVAS/IFRAME:
+   - Canvas elements: 'canvas', '#game-canvas', '#gameCanvas', '.game-canvas'
+   - Iframe embeds: 'iframe[src*="game"]', 'iframe.game-frame', '#game-iframe'
+   - Game containers: '#game', '#game-container', '.game-wrapper', '[id*="game"]'
+   - Unity/WebGL: 'canvas#unity-canvas', '#gameContainer canvas'
+
+2. IDENTIFY BY SIZE AND POSITION:
+   - Games are usually the LARGEST canvas/iframe on the page
+   - Games are typically centered or prominently placed
+   - Ads are usually in sidebars, headers, or fixed positions
+   - Look for elements with reasonable game dimensions (400-1200px wide, 300-800px tall)
+
+3. EXCLUDE NON-GAME ELEMENTS:
+   - Ads: '[class*="ad"]', '[id*="ad"]', 'ins.adsbygoogle', '[data-ad]'
+   - Social: '[class*="social"]', '[class*="share"]', '.fb-like'
+   - Navigation: 'header', 'nav', 'footer', '.menu', '.sidebar'
+   - Popups: '.modal', '.popup', '.overlay', '[class*="cookie"]'
+
+4. DETECTION STRATEGY in _start_browser():
+   ```python
+   # Try specific game selectors first
+   game_selectors = [
+       'canvas#game', 'canvas.game', '#game canvas',
+       'iframe[src*="game"]', '#game-container canvas',
+       'canvas:not([class*="ad"])'  # canvas that's not an ad
+   ]
+
+   for selector in game_selectors:
+       try:
+           element = self.page.locator(selector).first
+           if element.is_visible():
+               bbox = element.bounding_box()
+               # Verify it's a reasonable game size (not a tiny ad)
+               if bbox and bbox['width'] > 300 and bbox['height'] > 200:
+                   self.game_element = element
+                   break
+       except:
+           continue
+
+   # Fallback: find largest canvas
+   if not self.game_element:
+       canvases = self.page.locator('canvas').all()
+       largest = None
+       largest_area = 0
+       for c in canvases:
+           bbox = c.bounding_box()
+           if bbox:
+               area = bbox['width'] * bbox['height']
+               if area > largest_area:
+                   largest_area = area
+                   largest = c
+       self.game_element = largest
+   ```
+
+5. HIDE DISTRACTING ELEMENTS:
+   ```python
+   def _hide_overlays(self):
+       self.page.evaluate('''() => {{
+           const hide = [
+               '[class*="ad"]', '[id*="ad"]', 'ins.adsbygoogle',
+               '[class*="social"]', '[class*="share"]',
+               '[class*="cookie"]', '[class*="consent"]',
+               '.overlay:not(#game)', 'header', 'footer'
+           ];
+           hide.forEach(sel => {{
+               document.querySelectorAll(sel).forEach(el => {{
+                   if (!el.closest('#game') && !el.closest('.game')) {{
+                       el.style.display = 'none';
+                   }}
+               }});
+           }});
+       }}''')
+   ```
+
+=== GAME OVER DETECTION ===
+- Use VISUAL DETECTION as PRIMARY: compare frames, detect stillness (5+ identical frames)
+- Look for color changes (red flash, gray overlay, "game over" text)
+- BACKUP: JavaScript/DOM detection for game over elements
+
+=== SCREENSHOT AND OBSERVATION ===
+- Use page.screenshot(clip={{...}}) to capture ONLY the game element
+- Get bounding box from the identified game element
+- Resolution 400-600px wide is good
 - Convert to numpy array using PIL
-- For training efficiency, grayscale is fine; for visualization, use RGB
 
-BROWSER SETUP:
-- Use larger viewport (1024x768 or more) so game isn't cropped
-- Scroll game element into view: element.scroll_into_view_if_needed()
-- Click on game area to focus before starting
-- Handle cookie consent popups that may block the game
+=== BROWSER SETUP ===
+- Use wait_until="domcontentloaded" (NOT "networkidle" - ads never stop loading)
+- Viewport: 1280x800 or larger
+- Scroll game into view and click to focus
+- Call _hide_overlays() after page load
+- Handle cookie consent popups
 
-REWARD DESIGN:
-- +0.1 per step survived (survival reward)
-- +score_delta for score increases
-- -1.0 penalty when game over detected
-- Keep rewards small and balanced
+=== REWARD DESIGN (CRITICAL FOR LEARNING) ===
+
+The agent MUST receive meaningful feedback to learn. A flat "+0.1 per step" teaches nothing!
+
+1. UNDERSTAND THE GAME OBJECTIVE FIRST:
+   - What is the player trying to do? (survive, collect, avoid, reach goal)
+   - What actions lead to success? (jumping at right time, moving to safe spots)
+   - What causes failure? (collision, falling, timeout)
+
+2. DESIGN INTERMEDIATE/SHAPING REWARDS:
+   Many games don't have frequent score updates. You MUST create intermediate rewards:
+
+   For AVOIDANCE games (dodge obstacles, survive):
+   ```python
+   # Track player position relative to dangers
+   # Reward for maintaining safe distance from obstacles
+   # Reward for successful dodges (obstacle passed without collision)
+   # Small penalty for risky positions (too close to danger)
+   ```
+
+   For COLLECTION games (collect coins, eat food):
+   ```python
+   # Reward for moving toward collectibles (distance decreased)
+   # Penalty for moving away from collectibles
+   # Big reward for actually collecting
+   ```
+
+   For MOVEMENT games (reach goal, navigate):
+   ```python
+   # Reward for progress toward goal
+   # Penalty for going backward
+   # Reward for speed/efficiency
+   ```
+
+3. EXTRACT GAME STATE FOR REWARDS:
+   - Use JavaScript to read game variables if possible
+   - Track player position changes between frames
+   - Detect near-misses (close to obstacle but survived)
+   - Count successful actions (jumps that avoided something)
+
+4. REWARD STRUCTURE TEMPLATE:
+   ```python
+   def _calculate_reward(self):
+       reward = 0.0
+
+       # Base survival reward (small)
+       reward += 0.01
+
+       # Score-based reward (if available)
+       score_delta = self.current_score - self.last_score
+       if score_delta > 0:
+           reward += score_delta * 1.0
+
+       # Action effectiveness reward
+       # e.g., if agent took action and something good happened
+       if self.action_was_useful:
+           reward += 0.5
+
+       # Position-based shaping (game specific)
+       # e.g., reward for being in safe zone, penalty for danger zone
+
+       # Penalty for game over
+       if self.game_over:
+           reward = -1.0
+
+       return reward
+   ```
+
+5. SPECIFIC GAME PATTERNS:
+
+   JUMPING GAMES (Dino, Flappy Bird style):
+   - Reward for each obstacle successfully passed
+   - Track obstacles and detect when player clears them
+   - Penalize unnecessary jumps (wastes opportunity)
+
+   DODGING GAMES (Star Dodge, Asteroids style):
+   - Reward for time survived (but scale with difficulty)
+   - Reward for active dodging (position changed to avoid threat)
+   - Track "close calls" - near misses deserve bonus
+
+   CLICK/TAP GAMES:
+   - Reward must be tied to the ACTION having an effect
+   - If clicking does nothing useful, no reward
+   - Reward when click causes positive game state change
+
+6. AVOID THESE MISTAKES:
+   - DON'T give same reward regardless of action (agent won't learn)
+   - DON'T only reward on game over (too sparse)
+   - DON'T make rewards too large (causes instability)
+   - DO scale rewards to roughly -1.0 to +1.0 range
+   - DO give MORE reward for ACTIVE good play than passive survival
 
 Output a complete Python file with:
-1. All necessary imports (gymnasium, playwright, numpy, PIL, time)
-2. A gym.Env subclass with __init__, reset, step, render, close methods
-3. Discrete action space (typically: 0=nothing, 1=jump/space, 2=duck/down)
-4. Box observation space for screenshots
-5. _start_browser() that handles consent popups
-6. _get_canvas_screenshot() that clips to game area
-7. _is_game_over() with BOTH visual AND JavaScript detection
+1. All necessary imports (gymnasium, numpy, PIL, time, typing)
+2. nest_asyncio import and apply() BEFORE playwright import:
+   ```python
+   try:
+       import nest_asyncio
+       nest_asyncio.apply()
+   except ImportError:
+       pass
+   from playwright.sync_api import sync_playwright
+   ```
+3. A gym.Env subclass with __init__, reset, step, render, close methods
+4. Discrete action space (0=nothing, 1=jump/action, optionally 2=duck/alt)
+5. Box observation space for screenshots
+6. _start_browser() with INTELLIGENT GAME ELEMENT DETECTION
+7. _hide_overlays() to remove ads and distractions
+8. _get_canvas_screenshot() that clips to the GAME element only
+9. _is_game_over() with visual detection
 
-The class name should be based on the game URL (e.g., DinoGameEnv for dinosaur-game.io).
+The class name should be based on the game URL path (e.g., SpaceWavesEnv for /space-waves).
 
 Output ONLY the Python code. No explanations, no markdown code blocks, just the raw Python code starting with imports."""
 

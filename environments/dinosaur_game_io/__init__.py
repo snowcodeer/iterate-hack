@@ -1,5 +1,5 @@
 """Generated RL Environment for dinosaur_game_io."""
 
-from .dinogameenv import DinoGameEnv
+from .dinosaurgameenv import DinosaurGameEnv
 
-__all__ = ["DinoGameEnv"]
+__all__ = ["DinosaurGameEnv"]
