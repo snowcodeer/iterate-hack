@@ -1185,7 +1185,10 @@ def main():
 
                     # Quick check first
                     if training_results.get('episode_rewards'):
-                        quick = quick_reward_check(training_results['episode_rewards'])
+                        quick = quick_reward_check(
+                            training_results['episode_rewards'],
+                            training_results.get('episode_lengths')
+                        )
                         if quick['status'] == 'issues_found':
                             print("\n⚡ Quick Check Results:")
                             for issue in quick['issues']:

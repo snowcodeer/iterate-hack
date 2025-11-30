@@ -37,13 +37,33 @@ EVALUATION_PROMPT = """You are an expert RL environment designer reviewing a gen
 Analyze this environment and training results. Identify issues and suggest improvements.
 
 Consider these common problems:
+
+### REWARD ISSUES:
 1. FLAT REWARDS - Agent gets same reward regardless of action (no learning signal)
 2. SPARSE REWARDS - Only rewards on game over (too infrequent to learn from)
 3. REWARD SCALE - Rewards too large/small causing training instability
 4. NO INTERMEDIATE FEEDBACK - No shaping rewards to guide learning
 5. GAME STATE EXTRACTION - Not properly reading game state for rewards
-6. OBSERVATION ISSUES - Observations not capturing relevant game info
-7. ACTION MAPPING - Actions not properly mapped to game controls
+
+### GAME OVER DETECTION ISSUES (CRITICAL FOR WEB GAMES):
+6. PREMATURE TERMINATION - Game ends too early due to false positive detection
+   - Look for: identical_frame_count threshold < 30 (should be 30+, not 8)
+   - Look for: no grace period at start (should skip first 30 steps)
+   - Look for: unreliable color detection (red pixels, etc.)
+7. NO GRACE PERIOD - Game over checked during startup/loading
+   - Fix: Add "if self.steps_taken < 30: return False" at start of _is_game_over()
+8. AGGRESSIVE FRAME DETECTION - Too few identical frames triggers game over
+   - 8 frames is TOO FEW - causes false positives
+   - Should require 30+ identical frames (~1 second)
+
+### OTHER ISSUES:
+9. OBSERVATION ISSUES - Observations not capturing relevant game info
+10. ACTION MAPPING - Actions not properly mapped to game controls
+
+## IMPORTANT: Episode Length Analysis
+- If avg episode length is very SHORT (< 50 steps), suspect PREMATURE GAME OVER
+- Short episodes + low rewards often means game over detection is broken
+- Check _is_game_over() for the issues listed above
 
 Output your analysis as JSON:
 ```json
@@ -95,16 +115,58 @@ IMPROVEMENT_PROMPT = """You are an expert RL environment designer. Improve this 
 ## Your Task
 Generate an IMPROVED version of this environment that fixes the identified issues.
 
-Focus on:
-1. Fixing the reward function to provide meaningful learning signal
-2. Adding intermediate/shaping rewards
-3. Properly extracting game state for rewards
-4. Ensuring actions have different expected outcomes
+### REWARD FUNCTION FIXES:
+1. Fix the reward function to provide meaningful learning signal
+2. Add intermediate/shaping rewards
+3. Properly extract game state for rewards
+4. Ensure actions have different expected outcomes
+5. Scale rewards to roughly -1.0 to +1.0 range
 
-IMPORTANT RULES:
+### GAME OVER DETECTION FIXES (CRITICAL):
+If the analysis mentions short episodes or premature termination, fix _is_game_over():
+
+1. ADD GRACE PERIOD - Skip checks during startup:
+   ```python
+   def _is_game_over(self, observation):
+       # Don't check during startup/loading
+       if self.steps_taken < 30:
+           return False
+       # ... rest of detection
+   ```
+
+2. INCREASE FRAME THRESHOLD - Require 30+ identical frames, NOT 8:
+   ```python
+   # BAD (causes false positives):
+   if self.identical_frame_count >= 8:
+       return True
+
+   # GOOD (conservative):
+   if self.identical_frame_count >= 30:
+       return True
+   ```
+
+3. REMOVE UNRELIABLE COLOR DETECTION:
+   - Remove any "red_pixels > X" checks
+   - Remove color-based game over detection
+   - These cause false positives from UI elements
+
+4. PREFER TEXT DETECTION:
+   ```python
+   try:
+       game_over = self.page.evaluate('''() => {{
+           const text = document.body.innerText.toLowerCase();
+           return text.includes('game over') || text.includes('try again');
+       }}''')
+       if game_over:
+           return True
+   except:
+       pass
+   ```
+
+### IMPORTANT RULES:
 - Keep the same class name and overall structure
 - Don't change the observation space or action space unless necessary
-- Add comments explaining reward logic
+- Add comments explaining reward logic and game over detection
 - Make rewards scale between -1.0 and +1.0 approximately
 
 Output ONLY the complete improved Python code. No explanations, no markdown, just the code."""
@@ -240,12 +302,13 @@ def improve_environment(
     return code.strip()
 
 
-def quick_reward_check(episode_rewards: List[float]) -> Dict[str, Any]:
+def quick_reward_check(episode_rewards: List[float], episode_lengths: List[int] = None) -> Dict[str, Any]:
     """
     Quick heuristic check of reward quality without LLM.
 
     Args:
         episode_rewards: List of episode rewards
+        episode_lengths: List of episode lengths (optional)
 
     Returns:
         Dict with quick analysis results
@@ -258,6 +321,22 @@ def quick_reward_check(episode_rewards: List[float]) -> Dict[str, Any]:
     rewards = np.array(episode_rewards)
 
     issues = []
+
+    # Check for very short episodes (suggests premature game over)
+    if episode_lengths:
+        avg_length = np.mean(episode_lengths)
+        if avg_length < 30:
+            issues.append({
+                'type': 'PREMATURE_GAME_OVER',
+                'severity': 'critical',
+                'message': f'Episodes are very short (avg {avg_length:.0f} steps) - likely premature game over detection. Check _is_game_over() for: identical_frame_count < 30, missing grace period, or unreliable color detection.'
+            })
+        elif avg_length < 50:
+            issues.append({
+                'type': 'SHORT_EPISODES',
+                'severity': 'major',
+                'message': f'Episodes are short (avg {avg_length:.0f} steps) - may indicate game over detection issues or very difficult game.'
+            })
 
     # Check for flat rewards (no variance)
     if np.std(rewards) < 0.001:

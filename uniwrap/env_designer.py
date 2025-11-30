@@ -144,10 +144,106 @@ Web game pages often have many elements (ads, menus, navigation, social buttons)
        }}''')
    ```
 
-=== GAME OVER DETECTION ===
-- Use VISUAL DETECTION as PRIMARY: compare frames, detect stillness (5+ identical frames)
-- Look for color changes (red flash, gray overlay, "game over" text)
-- BACKUP: JavaScript/DOM detection for game over elements
+=== GAME OVER DETECTION (CRITICAL - AVOID FALSE POSITIVES) ===
+
+Premature game over detection is a COMMON BUG that ruins training. The agent thinks the game ended when it didn't!
+
+1. GRACE PERIOD AT START:
+   - Skip game over checks for the first 30-50 steps
+   - Games often have loading screens, start animations, or need a click to begin
+   - These look like "stillness" but aren't game over
+   ```python
+   def _is_game_over(self, observation):
+       # Don't check game over during startup
+       if self.steps_taken < 30:
+           return False
+   ```
+
+2. IDENTICAL FRAME DETECTION - USE HIGH THRESHOLD:
+   - 8 identical frames is TOO FEW - brief pauses are normal
+   - Use 30+ identical frames (~1 second at 30fps) minimum
+   - Some games have natural pauses, menus, or slow moments
+   ```python
+   # BAD: Too aggressive
+   if self.identical_frame_count >= 8:  # WRONG - causes false positives
+       return True
+
+   # GOOD: Conservative threshold
+   if self.identical_frame_count >= 30:  # ~1 second of no change
+       return True
+   ```
+
+3. AVOID UNRELIABLE COLOR DETECTION:
+   - DON'T use "red pixel count" or similar heuristics
+   - Game elements, UI, particles can trigger false positives
+   - Red doesn't always mean game over - could be health bar, enemies, effects
+   ```python
+   # BAD - Don't do this:
+   if red_pixels > 5000:
+       return True  # WRONG - too many false positives
+   ```
+
+4. PREFER TEXT/DOM DETECTION:
+   - Check for actual "game over" text on the page
+   - Look for restart buttons appearing
+   - Check game state variables via JavaScript if possible
+   ```python
+   # GOOD - Check for actual game over text
+   try:
+       game_over_text = self.page.evaluate('''() => {
+           const text = document.body.innerText.toLowerCase();
+           return text.includes('game over') || text.includes('try again') || text.includes('play again');
+       }''')
+       if game_over_text:
+           return True
+   except:
+       pass
+   ```
+
+5. GAME STATE VIA JAVASCRIPT (BEST):
+   - Some games expose state variables
+   - Check canvas context, game objects, or global variables
+   ```python
+   try:
+       is_over = self.page.evaluate('() => window.gameOver || window.game?.isOver || false')
+       if is_over:
+           return True
+   except:
+       pass
+   ```
+
+6. COMPLETE _is_game_over() TEMPLATE:
+   ```python
+   def _is_game_over(self, observation: np.ndarray) -> bool:
+       # Grace period - don't check during game startup
+       if self.steps_taken < 30:
+           return False
+
+       # Track frame changes
+       frame_hash = hashlib.md5(observation.tobytes()).hexdigest()
+       if frame_hash == self.last_frame_hash:
+           self.identical_frame_count += 1
+       else:
+           self.identical_frame_count = 0
+       self.last_frame_hash = frame_hash
+
+       # Only trigger on LONG stillness (30+ frames = ~1 second)
+       if self.identical_frame_count >= 30:
+           return True
+
+       # Check for game over text (reliable)
+       try:
+           game_over = self.page.evaluate('''() => {
+               const text = document.body.innerText.toLowerCase();
+               return text.includes('game over') || text.includes('try again');
+           }''')
+           if game_over:
+               return True
+       except:
+           pass
+
+       return False
+   ```
 
 === SCREENSHOT AND OBSERVATION ===
 - Use page.screenshot(clip={{...}}) to capture ONLY the game element
