@@ -86,22 +86,55 @@ def tool_browse_game(url: str) -> ToolResult:
 
 
 def tool_generate_environment(game_info: Dict, game_type: str, hints: str = "") -> ToolResult:
-    """Generate a Gymnasium environment from game info."""
-    from uniwrap.env_designer import generate_environment_code
+    """Generate a Gymnasium environment from game info, including assets for pygame repos."""
+    import tempfile
+    import subprocess
+    import shutil
 
     try:
+        url = game_info.get('url', '')
+        is_github = 'github.com' in url.lower()
+        temp_repo_dir = None
+        asset_files = []
+
+        if game_type == "pygame" and is_github:
+            # Clone repo to get code AND assets
+            temp_repo_dir = tempfile.mkdtemp(prefix='uniwrap_assets_')
+            subprocess.run(['git', 'clone', url, temp_repo_dir], check=True, capture_output=True, timeout=60)
+
+            repo_path = Path(temp_repo_dir)
+
+            # Find all image assets
+            for ext in ['*.png', '*.gif', '*.jpg', '*.jpeg', '*.bmp', '*.wav', '*.mp3', '*.ogg']:
+                asset_files.extend(repo_path.glob(f'**/{ext}'))
+
+            # Also find the images folder if it exists
+            images_dir = repo_path / 'images'
+            if images_dir.exists():
+                asset_files.extend(images_dir.glob('*'))
+
+        from uniwrap.env_designer import generate_environment_code
+
         code = generate_environment_code(
             game_info=game_info,
             game_type=game_type,
             hints=hints
         )
-        return ToolResult(True, {"code": code})
+
+        return ToolResult(True, {
+            "code": code,
+            "temp_repo_dir": temp_repo_dir,
+            "asset_files": [str(f) for f in asset_files],
+            "game_type": game_type
+        })
     except Exception as e:
         return ToolResult(False, None, str(e))
 
 
-def tool_save_environment(env_name: str, code: str) -> ToolResult:
-    """Save environment code to disk."""
+def tool_save_environment(env_name: str, code: str, temp_repo_dir: str = None, asset_files: list = None) -> ToolResult:
+    """Save environment code and assets to disk."""
+    import shutil
+
     try:
         env_dir = Path(f"environments/{env_name}")
         env_dir.mkdir(parents=True, exist_ok=True)
@@ -119,10 +152,37 @@ def tool_save_environment(env_name: str, code: str) -> ToolResult:
         init_file = env_dir / "__init__.py"
         init_file.write_text(f'from .{env_file.stem} import {class_name}\n\n__all__ = ["{class_name}"]\n')
 
+        # Copy assets if provided
+        copied_assets = []
+        if asset_files:
+            for asset_path in asset_files:
+                asset_path = Path(asset_path)
+                if asset_path.exists():
+                    dest = env_dir / asset_path.name
+                    shutil.copy2(asset_path, dest)
+                    copied_assets.append(asset_path.name)
+
+        # Also check for images subdirectory in temp repo
+        if temp_repo_dir:
+            temp_repo = Path(temp_repo_dir)
+            images_dir = temp_repo / 'images'
+            if images_dir.exists():
+                dest_images = env_dir / 'images'
+                if not dest_images.exists():
+                    shutil.copytree(images_dir, dest_images)
+                    copied_assets.append('images/')
+
+            # Cleanup temp repo
+            try:
+                shutil.rmtree(temp_repo_dir)
+            except:
+                pass
+
         return ToolResult(True, {
             "env_name": env_name,
             "env_path": str(env_file),
-            "class_name": class_name
+            "class_name": class_name,
+            "copied_assets": copied_assets
         })
     except Exception as e:
         return ToolResult(False, None, str(e))
@@ -541,7 +601,7 @@ class AgentOrchestrator:
             title = self.game_info.get('title', '').lower()
             if 'pygame' in text_preview or 'pygame' in title or 'pygame' in game_url.lower():
                 game_type = "pygame"
-            elif any(kw in text_preview for kw in ['python game', 'space invaders', 'snake game', 'tetris']):
+            elif any(kw in text_preview for kw in ['python game', 'space invaders', 'snake game', 'tetris', 'pacman', 'pac-man']):
                 game_type = "pygame"  # Likely a pygame game even if not explicitly stated
 
         self.log(f"   Game Type: {game_type}")
@@ -555,16 +615,25 @@ class AgentOrchestrator:
             return {"success": False, "error": f"Failed to generate environment: {gen_result.error}"}
 
         self.current_code = gen_result.data["code"]
+        temp_repo_dir = gen_result.data.get("temp_repo_dir")
+        asset_files = gen_result.data.get("asset_files", [])
 
         # Create env name from URL
         import re
         url_clean = game_url.replace("https://", "").replace("http://", "")
         self.env_name = re.sub(r'[^a-zA-Z0-9]', '_', url_clean)[:30].strip('_')
 
-        # Save initial version
-        save_result = tool_save_environment(self.env_name, self.current_code)
+        # Save initial version with assets
+        save_result = tool_save_environment(
+            self.env_name,
+            self.current_code,
+            temp_repo_dir=temp_repo_dir,
+            asset_files=asset_files
+        )
         if save_result.success:
             self.log(f"   Saved: {save_result.data['env_path']}")
+            if save_result.data.get('copied_assets'):
+                self.log(f"   Assets copied: {len(save_result.data['copied_assets'])} files")
 
         # Step 3: Supervisor loop
         self.log(f"\n[Phase 3] Supervisor Agent - Quality Loop")
