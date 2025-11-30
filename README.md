@@ -168,6 +168,32 @@ CHANGES MADE:
 - [REWARD] Added score-based reward
 ```
 
+## How UniWrap Compares
+
+| Feature | UniWrap | OpenAI Retro | Unity ML-Agents |
+|---------|---------|--------------|-----------------|
+| **Game Source** | Any web game URL or pygame code | ROM files (Atari, NES, SNES, Genesis) | Unity game projects |
+| **Setup Required** | Just provide a URL | Requires ROMs + manual integration files | Requires Unity SDK integration |
+| **Environment Generation** | AI-generated from scratch | Pre-built, requires memory mapping | Manual C# scripting |
+| **Auto-Improvement** | AI supervisor fixes issues automatically | None | None |
+| **Game Types** | Modern web games, pygame | ~1000 classic retro games | Unity-built games only |
+| **Learning Curve** | Minimal - paste URL, train | Moderate - ROM setup, integration | High - Unity + ML-Agents SDK |
+| **Legal Concerns** | Uses publicly accessible web games | ROM licensing issues | None (your own games) |
+
+### UniWrap's Unique Value
+
+1. **Zero-Config Environment Generation**: Paste a URL, get a trainable RL environment. No manual reward engineering, observation extraction, or game-over detection required.
+
+2. **AI Supervisor Agent**: Automatically analyzes training runs and fixes common issues:
+   - Premature episode termination
+   - Flat or sparse rewards
+   - Incorrect action mappings
+   - Each improvement is documented in `CHANGELOG.txt`
+
+3. **Iterative Refinement**: Environments evolve (v1 → v2 → v3) with each supervisor pass, progressively improving until the agent learns effectively.
+
+4. **Works with Any Web Game**: No ROMs, no SDKs, no game engine integration. If it runs in a browser, UniWrap can wrap it.
+
 ## Requirements
 
 - Python 3.8+
