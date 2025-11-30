@@ -190,10 +190,10 @@ Premature game over detection is a COMMON BUG that ruins training. The agent thi
    ```python
    # GOOD - Check for actual game over text
    try:
-       game_over_text = self.page.evaluate('''() => {
+       game_over_text = self.page.evaluate('''() => {{
            const text = document.body.innerText.toLowerCase();
            return text.includes('game over') || text.includes('try again') || text.includes('play again');
-       }''')
+       }}''')
        if game_over_text:
            return True
    except:
@@ -233,10 +233,10 @@ Premature game over detection is a COMMON BUG that ruins training. The agent thi
 
        # Check for game over text (reliable)
        try:
-           game_over = self.page.evaluate('''() => {
+           game_over = self.page.evaluate('''() => {{
                const text = document.body.innerText.toLowerCase();
                return text.includes('game over') || text.includes('try again');
-           }''')
+           }}''')
            if game_over:
                return True
        except:
