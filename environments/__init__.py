@@ -12,3 +12,5 @@ for _subdir in _env_dir.iterdir():
                 importlib.import_module(f".{_subdir.name}", package=__name__)
             except ImportError as e:
                 print(f"Warning: Could not import environment {_subdir.name}: {e}")
+from . import onlinespiele_sammlung_de_tetris_tetrisgames_xin_yang
+from . import python_tetris
