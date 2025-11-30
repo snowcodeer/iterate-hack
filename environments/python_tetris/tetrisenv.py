@@ -1,10 +1,35 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+import os
+
+# Import pygame._freetype BEFORE pygame to avoid circular import on Python 3.14
+try:
+    import pygame._freetype as freetype
+    FREETYPE_AVAILABLE = True
+except ImportError:
+    FREETYPE_AVAILABLE = False
+    freetype = None
+
 import pygame
 from copy import deepcopy
 from random import choice, randrange
 from typing import Optional
+
+# System font paths for freetype fallback
+SYSTEM_FONT_PATHS = [
+    '/System/Library/Fonts/Helvetica.ttc',  # macOS
+    '/System/Library/Fonts/Supplemental/Arial.ttf',  # macOS
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
+    'C:\\Windows\\Fonts\\arial.ttf',  # Windows
+]
+
+def get_system_font_path():
+    """Find an available system font file."""
+    for path in SYSTEM_FONT_PATHS:
+        if os.path.exists(path):
+            return path
+    return None
 
 class TetrisEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
@@ -278,25 +303,32 @@ class TetrisEnv(gym.Env):
                 figure_rect.y = self.next_figure[i].y * self.TILE + 185
                 pygame.draw.rect(self.screen, self.next_color, figure_rect)
 
-            # Font rendering with robust error handling
+            # Font rendering - use freetype (works on Python 3.14)
             try:
-                main_font = pygame.font.Font(None, 65)
-                font = pygame.font.Font(None, 45)
-                
-                title_tetris = main_font.render('TETRIS', True, pygame.Color('darkorange'))
-                title_score = font.render('score:', True, pygame.Color('green'))
-                title_record = font.render('record:', True, pygame.Color('purple'))
-                score_text = font.render(str(self.score), True, pygame.Color('white'))
-                
-                self.screen.blit(title_tetris, (485, -10))
-                self.screen.blit(title_score, (535, 780))
-                self.screen.blit(score_text, (550, 840))
-                self.screen.blit(title_record, (525, 650))
-            except Exception:
-                try:
-                    main_font = pygame.font.SysFont('arial', 65)
-                    font = pygame.font.SysFont('arial', 45)
-                    
+                if FREETYPE_AVAILABLE:
+                    font_path = get_system_font_path()
+                    if font_path and freetype:
+                        freetype.init()
+                        main_ft = freetype.Font(font_path, 55)
+                        small_ft = freetype.Font(font_path, 35)
+
+                        # freetype.render() returns (surface, rect)
+                        title_surf, _ = main_ft.render('TETRIS', pygame.Color('darkorange'))
+                        score_label, _ = small_ft.render('score:', pygame.Color('green'))
+                        score_val, _ = small_ft.render(str(self.score), pygame.Color('white'))
+                        record_label, _ = small_ft.render('record:', pygame.Color('purple'))
+
+                        self.screen.blit(title_surf, (485, 10))
+                        self.screen.blit(score_label, (535, 780))
+                        self.screen.blit(score_val, (550, 830))
+                        self.screen.blit(record_label, (525, 650))
+                    else:
+                        raise Exception("No font path found")
+                else:
+                    # Fallback to pygame.font (may not work on Python 3.14)
+                    main_font = pygame.font.Font(None, 65)
+                    font = pygame.font.Font(None, 45)
+
                     title_tetris = main_font.render('TETRIS', True, pygame.Color('darkorange'))
                     title_score = font.render('score:', True, pygame.Color('green'))
                     title_record = font.render('record:', True, pygame.Color('purple'))
@@ -306,8 +338,8 @@ class TetrisEnv(gym.Env):
                     self.screen.blit(title_score, (535, 780))
                     self.screen.blit(score_text, (550, 840))
                     self.screen.blit(title_record, (525, 650))
-                except Exception:
-                    pass
+            except Exception:
+                pass  # Skip text rendering if fonts unavailable
 
             pygame.display.flip()
             if self.clock:
