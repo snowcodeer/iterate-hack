@@ -97,21 +97,38 @@ class TrainingCallback(BaseCallback):
 class RLAgent:
     """RL Agent that can train on and play any Gymnasium environment."""
 
-    def __init__(self, env_class, model_path: Optional[Path] = None):
+    def __init__(self, env_class, model_path: Optional[Path] = None, headless: bool = True):
         """
         Initialize the RL agent.
 
         Args:
             env_class: The environment class to use
             model_path: Optional path to a saved model
+            headless: If True, run browser-based envs without visible window
         """
         if not SB3_AVAILABLE:
             raise ImportError("stable-baselines3 is required. Install with: pip install stable-baselines3")
 
         self.env_class = env_class
         self.model_path = model_path
+        self.headless = headless
         self.model = None
         self.env = None
+
+    def _make_env(self, render_mode=None):
+        """Create environment instance with appropriate parameters."""
+        import inspect
+        sig = inspect.signature(self.env_class.__init__)
+        params = sig.parameters
+
+        kwargs = {}
+        if render_mode is not None:
+            kwargs['render_mode'] = render_mode
+        # Pass headless param if the env supports it (web-based envs)
+        if 'headless' in params:
+            kwargs['headless'] = self.headless if render_mode != "human" else False
+
+        return self.env_class(**kwargs)
 
     def train(
         self,
@@ -132,8 +149,8 @@ class RLAgent:
         Returns:
             Dict with training results
         """
-        # Create vectorized environment
-        self.env = DummyVecEnv([lambda: self.env_class(render_mode=None)])
+        # Create vectorized environment (use headless mode for training)
+        self.env = DummyVecEnv([lambda: self._make_env(render_mode=None)])
 
         # Create or continue PPO model
         if continue_training and self.model is not None:
@@ -232,7 +249,7 @@ class RLAgent:
         if self.model is None:
             raise ValueError("No model loaded. Train or load a model first.")
 
-        env = self.env_class(render_mode="human" if render else None)
+        env = self._make_env(render_mode="human" if render else None)
 
         episode_rewards = []
         episode_lengths = []
@@ -633,7 +650,8 @@ def train_agent(
     env_name: str,
     total_timesteps: int = 10000,
     progress_callback: Optional[Callable] = None,
-    continue_training: bool = False
+    continue_training: bool = False,
+    headless: bool = True
 ) -> Dict[str, Any]:
     """
     Train an agent on an environment.
@@ -644,11 +662,12 @@ def train_agent(
         total_timesteps: Training timesteps
         progress_callback: Optional progress callback
         continue_training: If True, load existing model and continue training
+        headless: If True, run browser-based envs without visible window
 
     Returns:
         Training results dict
     """
-    agent = RLAgent(env_class)
+    agent = RLAgent(env_class, headless=headless)
 
     # Determine save path (versioned to avoid overwriting)
     if continue_training:

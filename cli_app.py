@@ -584,7 +584,8 @@ def train_agent(env_name: str, timesteps: int = 10000, visual: bool = False, con
             env_name=env_name,
             total_timesteps=timesteps,
             progress_callback=progress,
-            continue_training=continue_training
+            continue_training=continue_training,
+            headless=not visual  # headless=True when visual=False
         )
 
         print()
