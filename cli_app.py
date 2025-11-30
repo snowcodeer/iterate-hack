@@ -89,9 +89,8 @@ def print_menu(visual_mode: bool):
     print("  4. Train RL agent")
     print("  5. Test trained agent")
     print("  6. Evaluate & generate graphs")
-    print("  7. Analyze & improve environment (AI supervisor)")
+    print("  \033[95m7. AI Assistant (Generate/Analyze/Improve)\033[0m")
     print("  8. Delete environment")
-    print("  \033[95m9. Autonomous Agent Mode (NEW!)\033[0m")
     visual_status = "\033[92mON\033[0m" if visual_mode else "\033[91mOFF\033[0m"
     print(f"  v. Toggle visual mode [{visual_status}]")
     print("  q. Quit")
@@ -1286,236 +1285,312 @@ def main():
             input("\nPress Enter to continue...")
 
         elif choice == '7':
-            # Analyze & improve environment with AI supervisor
-            if not envs:
-                print("\n\033[91mNo environments available. Generate one first.\033[0m")
+            # Unified AI Assistant - Generate, Analyze, or Improve
+            print("\n\033[95m" + "=" * 60 + "\033[0m")
+            print("\033[95m  AI ASSISTANT\033[0m")
+            print("\033[95m" + "=" * 60 + "\033[0m")
+            print("\nTwo AI agents collaborate to create trainable RL environments:")
+            print("  \033[94mAgent 1 (Generator)\033[0m: Analyzes games, generates environment code")
+            print("  \033[94mAgent 2 (Supervisor)\033[0m: Analyzes code, tests training, requests fixes")
+
+            print("\n\033[93mWhat would you like to do?\033[0m")
+            print("  1. Create NEW environment from URL (full autonomous pipeline)")
+            print("  2. Analyze & improve EXISTING environment")
+            print("  b. Back to main menu")
+
+            mode_choice = input("\nSelect [1]: ").strip().lower() or "1"
+
+            if mode_choice == 'b':
                 input("\nPress Enter to continue...")
                 continue
 
-            print("\nAvailable environments:")
-            for i, (name, cls) in enumerate(envs, 1):
-                # Check if we have training data
-                training_graph_dir = Path("training_graphs")
-                has_training = any(training_graph_dir.glob(f"{name}_training_*.png")) if training_graph_dir.exists() else False
-                status = " [has training data]" if has_training else ""
-                print(f"  {i}. {name} ({cls}){status}")
-            print("  b. Back to main menu")
+            elif mode_choice == '1':
+                # Full autonomous pipeline from URL
+                print("\n\033[94m--- Autonomous Environment Generation ---\033[0m")
+                print("The agents will iterate until quality >= 7/10 or max 5 iterations.\n")
 
-            selection = input("\nSelect environment to analyze (number or 'b'): ").strip().lower()
-            if selection == 'b':
-                continue
+                game_url = input("Enter game URL: ").strip()
+                if not game_url:
+                    print("\033[91mNo URL provided.\033[0m")
+                    input("\nPress Enter to continue...")
+                    continue
 
-            try:
-                idx = int(selection) - 1
-                if 0 <= idx < len(envs):
-                    env_name = envs[idx][0]
+                hints = input("Any hints for the AI? (controls, objective, etc.) [optional]: ").strip()
 
-                    print(f"\n\033[94mAnalyzing environment: {env_name}\033[0m")
+                print("\n\033[93mStarting agent orchestration...\033[0m\n")
 
-                    # Read environment code
-                    env_path = Path(f'environments/{env_name}')
-                    env_code = None
-                    env_file = None
-                    for py_file in env_path.glob('*.py'):
-                        if not py_file.name.startswith('_'):
-                            env_code = py_file.read_text()
-                            env_file = py_file
-                            break
+                try:
+                    from uniwrap.agents import run_agents
 
-                    if not env_code:
-                        print("\033[91mCould not find environment code.\033[0m")
-                        input("\nPress Enter to continue...")
-                        continue
+                    result = run_agents(game_url, hints)
 
-                    # Check for training results
-                    print("\nChecking for training data...")
-                    from uniwrap.rl_agent import get_latest_model_path, load_model_metadata
+                    if result['success']:
+                        print(f"\n\033[92m✅ Agents completed successfully!\033[0m")
+                        print(f"   Environment: {result['env_name']}")
+                        print(f"   Quality Score: {result['quality_score']}/10")
+                        print(f"   Iterations: {result['iterations']}")
 
-                    model_path = get_latest_model_path(env_name)
-                    training_results = {}
+                        # Refresh env list
+                        envs = list_environments()
+                        last_env = result['env_name']
+                    else:
+                        print(f"\n\033[91m❌ Agent orchestration failed: {result.get('error', 'Unknown error')}\033[0m")
 
-                    if model_path:
-                        metadata = load_model_metadata(model_path)
-                        if metadata:
-                            print(f"  Found model: {model_path.name}")
-                            print(f"  Trained with obs shape: {metadata.get('observation_shape')}")
+                except Exception as e:
+                    print(f"\n\033[91m❌ Error: {e}\033[0m")
+                    import traceback
+                    traceback.print_exc()
 
-                    # Option to do quick training for analysis
-                    print("\nOptions:")
-                    print("  1. Quick train (1000 steps) then analyze")
-                    print("  2. Analyze code only (no training data)")
-                    print("  b. Back")
-                    analyze_choice = input("Select [1]: ").strip() or "1"
+            elif mode_choice == '2':
+                # Analyze & improve existing environment
+                if not envs:
+                    print("\n\033[91mNo environments available. Generate one first.\033[0m")
+                    input("\nPress Enter to continue...")
+                    continue
 
-                    if analyze_choice == 'b':
-                        continue
-                    elif analyze_choice == '1':
-                        # Quick training
-                        print("\n🏃 Running quick training (1000 steps)...")
+                print("\n\033[94m--- Analyze & Improve Existing Environment ---\033[0m")
+                print("\nAvailable environments:")
+                for i, (name, cls) in enumerate(envs, 1):
+                    training_graph_dir = Path("training_graphs")
+                    has_training = any(training_graph_dir.glob(f"{name}_training_*.png")) if training_graph_dir.exists() else False
+                    status = " [has training data]" if has_training else ""
+                    print(f"  {i}. {name} ({cls}){status}")
+                print("  b. Back")
 
-                        # Import and run training
-                        for key in list(sys.modules.keys()):
-                            if key.startswith(f'environments.{env_name}'):
-                                del sys.modules[key]
+                selection = input("\nSelect environment (number or 'b'): ").strip().lower()
+                if selection == 'b':
+                    input("\nPress Enter to continue...")
+                    continue
 
-                        env_module = importlib.import_module(f'environments.{env_name}')
-                        env_class_name = env_module.__all__[0] if hasattr(env_module, '__all__') else None
-                        if not env_class_name:
-                            for n in dir(env_module):
-                                if n.endswith('Env') and not n.startswith('_'):
-                                    env_class_name = n
-                                    break
-                        env_class = getattr(env_module, env_class_name)
+                try:
+                    idx = int(selection) - 1
+                    if 0 <= idx < len(envs):
+                        env_name = envs[idx][0]
 
-                        from uniwrap.rl_agent import RLAgent
-                        agent = RLAgent(env_class)
+                        print(f"\n\033[94mAnalyzing environment: {env_name}\033[0m")
 
-                        episode_rewards = []
-                        episode_lengths = []
+                        # Read environment code
+                        env_path = Path(f'environments/{env_name}')
+                        env_code = None
+                        env_file = None
+                        for py_file in env_path.glob('*.py'):
+                            if not py_file.name.startswith('_'):
+                                env_code = py_file.read_text()
+                                env_file = py_file
+                                break
 
-                        def collect_callback(data):
-                            if data['type'] == 'episode_complete':
-                                episode_rewards.append(data['reward'])
-                                episode_lengths.append(data['length'])
-                                ep = data['episode']
-                                r = data['reward']
-                                print(f"  Episode {ep:3d} | Reward: {r:7.1f}")
+                        if not env_code:
+                            print("\033[91mCould not find environment code.\033[0m")
+                            input("\nPress Enter to continue...")
+                            continue
 
-                        try:
-                            agent.train(
-                                total_timesteps=1000,
-                                progress_callback=collect_callback,
-                                save_path=None  # Don't save
-                            )
-                        except Exception as e:
-                            print(f"\033[91mTraining error: {e}\033[0m")
-                        finally:
-                            agent.close()
+                        # Options for analysis
+                        print("\nAnalysis mode:")
+                        print("  1. Quick train (1000 steps) then analyze")
+                        print("  2. Analyze code only (no training)")
+                        print("  3. Full autonomous loop (iterate until quality >= 7)")
+                        print("  b. Back")
+                        analyze_choice = input("Select [1]: ").strip() or "1"
 
-                        training_results = {
-                            'episode_rewards': episode_rewards,
-                            'episode_lengths': episode_lengths
-                        }
+                        if analyze_choice == 'b':
+                            input("\nPress Enter to continue...")
+                            continue
 
-                    # Run analysis
-                    print("\n🔍 Analyzing environment with AI supervisor...")
-                    from uniwrap.env_supervisor import analyze_environment, print_analysis_report, quick_reward_check, improve_environment
+                        elif analyze_choice == '3':
+                            # Full autonomous improvement loop on existing env
+                            print("\n\033[93mStarting autonomous improvement loop...\033[0m")
 
-                    # Quick check first
-                    if training_results.get('episode_rewards'):
-                        quick = quick_reward_check(
-                            training_results['episode_rewards'],
-                            training_results.get('episode_lengths')
-                        )
-                        if quick['status'] == 'issues_found':
-                            print("\n⚡ Quick Check Results:")
-                            for issue in quick['issues']:
-                                print(f"  {issue['severity'].upper()}: {issue['message']}")
+                            from uniwrap.agents import AgentOrchestrator, tool_analyze_code, tool_train_agent, tool_improve_environment, tool_save_environment
 
-                    # Full AI analysis
-                    analysis = analyze_environment(
-                        env_code=env_code,
-                        training_results=training_results
-                    )
+                            max_iterations = 5
+                            quality_score = 0
+                            current_code = env_code
+                            current_env_name = env_name
+                            iteration = 0
 
-                    print_analysis_report(analysis)
+                            while iteration < max_iterations and quality_score < 7:
+                                iteration += 1
+                                print(f"\n   --- Iteration {iteration}/{max_iterations} ---")
 
-                    # Offer to improve
-                    if analysis.get('quality_score', 10) < 7 or analysis.get('issues'):
-                        print("\n\033[93mWould you like the AI to suggest improvements?\033[0m")
-                        print("  1. Yes, generate improved environment")
-                        print("  2. No, just show analysis")
-                        improve_choice = input("Select [2]: ").strip() or "2"
+                                # Analyze code
+                                analysis = tool_analyze_code(current_code)
+                                issues = analysis.data["issues"] if analysis.success else []
 
-                        if improve_choice == '1':
-                            feedback = input("\nAny specific feedback or requirements? (Enter to skip): ").strip()
+                                print(f"   Code Analysis: {len(issues)} issues found")
+                                for issue in issues[:3]:
+                                    print(f"     - [{issue['severity']}] {issue['issue']}")
 
-                            print("\n🔧 Generating improved environment...")
-                            result = improve_environment(
-                                env_code=env_code,
-                                analysis=analysis,
-                                user_feedback=feedback
-                            )
-                            improved_code = result['code']
-                            changelog = result['changelog']
-
-                            # Show changelog
-                            print("\n" + "=" * 60)
-                            print("📋 CHANGES MADE:")
-                            print("=" * 60)
-                            if changelog:
-                                print(changelog)
-                            else:
-                                print("(No changelog provided)")
-                            print("=" * 60)
-
-                            # Show diff summary
-                            print(f"\n📝 Code size: {len(env_code)} → {len(improved_code)} chars")
-
-                            # Ask to save
-                            print("\nOptions:")
-                            print("  1. Save as new version (e.g., env_v2)")
-                            print("  2. Overwrite current")
-                            print("  3. Show code (don't save)")
-                            print("  4. Cancel")
-                            save_choice = input("Select [1]: ").strip() or "1"
-
-                            if save_choice == '1':
-                                # Save as new version
-                                version = 2
-                                while Path(f'environments/{env_name}_v{version}').exists():
-                                    version += 1
-                                new_env_name = f"{env_name}_v{version}"
-                                new_env_path = Path(f'environments/{new_env_name}')
-                                new_env_path.mkdir(parents=True, exist_ok=True)
-
-                                # Write improved code
-                                new_file = new_env_path / env_file.name
-                                new_file.write_text(improved_code)
-
-                                # Write __init__.py for the new env
-                                init_content = env_path.joinpath('__init__.py').read_text()
-                                (new_env_path / '__init__.py').write_text(
-                                    init_content.replace(env_name, new_env_name)
-                                )
-
-                                # Write changelog as txt file
-                                if changelog:
-                                    changelog_file = new_env_path / "CHANGELOG.txt"
-                                    changelog_content = f"""{new_env_name} - Improved by AI Supervisor
-{'=' * 50}
-
-Based on: {env_name}
-
-CHANGES MADE:
-{changelog}
-"""
-                                    changelog_file.write_text(changelog_content)
-
-                                print(f"\n\033[92m✅ Saved as: {new_env_name}\033[0m")
-                                print(f"   Path: {new_env_path}")
-                                if changelog:
-                                    print(f"   Changelog: {new_env_path}/CHANGELOG.txt")
-
-                            elif save_choice == '2':
-                                # Overwrite
-                                confirm = input("Are you sure you want to overwrite? (yes/no): ").strip().lower()
-                                if confirm == 'yes':
-                                    env_file.write_text(improved_code)
-                                    print(f"\n\033[92m✅ Overwritten: {env_file}\033[0m")
+                                if analysis.data.get("has_critical", False):
+                                    print(f"   Critical issues - requesting improvement (skipping training)")
+                                    quality_score = max(1, 10 - len(issues) * 2)
                                 else:
-                                    print("Cancelled.")
+                                    # Train
+                                    print(f"   Training agent (5000 steps)...")
+                                    train_result = tool_train_agent(current_env_name, timesteps=5000)
 
-                            elif save_choice == '3':
-                                print("\n" + "=" * 60)
-                                print("IMPROVED CODE:")
-                                print("=" * 60)
-                                print(improved_code[:3000])
-                                if len(improved_code) > 3000:
-                                    print(f"\n... ({len(improved_code) - 3000} more chars)")
+                                    if train_result.success:
+                                        data = train_result.data
+                                        print(f"   Training: {data['episodes']} eps, avg reward: {data['avg_reward']:.2f}")
 
-            except (ValueError, IndexError) as e:
-                print(f"\033[91mInvalid selection: {e}\033[0m")
+                                        # Quality scoring
+                                        quality_score = 5
+                                        if data['avg_length'] > 50: quality_score += 1
+                                        if data['avg_length'] > 100: quality_score += 1
+                                        if data['reward_std'] > 0.1: quality_score += 1
+                                        if data['avg_reward'] > 0: quality_score += 1
+                                        if len(issues) == 0: quality_score += 1
+                                        quality_score = min(10, quality_score)
+
+                                        print(f"   Quality Score: {quality_score}/10")
+                                    else:
+                                        print(f"   Training failed: {train_result.error[:100]}")
+                                        quality_score = 2
+
+                                # Improve if needed
+                                if quality_score < 7 and iteration < max_iterations:
+                                    print(f"   Requesting improvements...")
+
+                                    improve_result = tool_improve_environment(current_code, issues, {})
+
+                                    if improve_result.success:
+                                        current_code = improve_result.data["improved_code"]
+
+                                        new_env_name = f"{env_name}_v{iteration + 1}"
+                                        save_result = tool_save_environment(new_env_name, current_code)
+                                        if save_result.success:
+                                            current_env_name = new_env_name
+                                            print(f"   Saved: {new_env_name}")
+                                    else:
+                                        print(f"   Improvement failed: {improve_result.error}")
+
+                            print(f"\n\033[92m✅ Loop complete!\033[0m")
+                            print(f"   Final environment: {current_env_name}")
+                            print(f"   Quality Score: {quality_score}/10")
+                            print(f"   Iterations: {iteration}")
+
+                            envs = list_environments()
+                            last_env = current_env_name
+
+                        else:
+                            # Single-shot analysis (options 1 or 2)
+                            training_results = {}
+
+                            if analyze_choice == '1':
+                                print("\n🏃 Running quick training (1000 steps)...")
+
+                                for key in list(sys.modules.keys()):
+                                    if key.startswith(f'environments.{env_name}'):
+                                        del sys.modules[key]
+
+                                env_module = importlib.import_module(f'environments.{env_name}')
+                                env_class_name = env_module.__all__[0] if hasattr(env_module, '__all__') else None
+                                if not env_class_name:
+                                    for n in dir(env_module):
+                                        if n.endswith('Env') and not n.startswith('_'):
+                                            env_class_name = n
+                                            break
+                                env_class = getattr(env_module, env_class_name)
+
+                                from uniwrap.rl_agent import RLAgent
+                                agent = RLAgent(env_class)
+
+                                episode_rewards = []
+                                episode_lengths = []
+
+                                def collect_callback(data):
+                                    if data['type'] == 'episode_complete':
+                                        episode_rewards.append(data['reward'])
+                                        episode_lengths.append(data['length'])
+                                        print(f"  Episode {data['episode']:3d} | Reward: {data['reward']:7.1f}")
+
+                                try:
+                                    agent.train(total_timesteps=1000, progress_callback=collect_callback, save_path=None)
+                                except Exception as e:
+                                    print(f"\033[91mTraining error: {e}\033[0m")
+                                finally:
+                                    agent.close()
+
+                                training_results = {'episode_rewards': episode_rewards, 'episode_lengths': episode_lengths}
+
+                            # Run AI analysis
+                            print("\n🔍 Analyzing environment with AI...")
+                            from uniwrap.env_supervisor import analyze_environment, print_analysis_report, quick_reward_check, improve_environment
+
+                            if training_results.get('episode_rewards'):
+                                quick = quick_reward_check(training_results['episode_rewards'], training_results.get('episode_lengths'))
+                                if quick['status'] == 'issues_found':
+                                    print("\n⚡ Quick Check:")
+                                    for issue in quick['issues']:
+                                        print(f"  {issue['severity'].upper()}: {issue['message']}")
+
+                            analysis = analyze_environment(env_code=env_code, training_results=training_results)
+                            print_analysis_report(analysis)
+
+                            # Offer to improve
+                            if analysis.get('quality_score', 10) < 7 or analysis.get('issues'):
+                                print("\n\033[93mGenerate improved environment?\033[0m")
+                                print("  1. Yes, generate improved version")
+                                print("  2. No, just show analysis")
+                                improve_choice = input("Select [2]: ").strip() or "2"
+
+                                if improve_choice == '1':
+                                    feedback = input("\nAny specific feedback? (Enter to skip): ").strip()
+
+                                    print("\n🔧 Generating improved environment...")
+                                    result = improve_environment(env_code=env_code, analysis=analysis, user_feedback=feedback)
+                                    improved_code = result['code']
+                                    changelog = result['changelog']
+
+                                    print("\n" + "=" * 60)
+                                    print("📋 CHANGES:")
+                                    print("=" * 60)
+                                    print(changelog if changelog else "(No changelog)")
+                                    print("=" * 60)
+
+                                    print(f"\n📝 Code: {len(env_code)} → {len(improved_code)} chars")
+
+                                    print("\nSave options:")
+                                    print("  1. Save as new version")
+                                    print("  2. Overwrite current")
+                                    print("  3. Show code only")
+                                    print("  4. Cancel")
+                                    save_choice = input("Select [1]: ").strip() or "1"
+
+                                    if save_choice == '1':
+                                        version = 2
+                                        while Path(f'environments/{env_name}_v{version}').exists():
+                                            version += 1
+                                        new_env_name = f"{env_name}_v{version}"
+                                        new_env_path = Path(f'environments/{new_env_name}')
+                                        new_env_path.mkdir(parents=True, exist_ok=True)
+
+                                        new_file = new_env_path / env_file.name
+                                        new_file.write_text(improved_code)
+
+                                        init_content = env_path.joinpath('__init__.py').read_text()
+                                        (new_env_path / '__init__.py').write_text(init_content.replace(env_name, new_env_name))
+
+                                        if changelog:
+                                            (new_env_path / "CHANGELOG.txt").write_text(
+                                                f"{new_env_name} - Improved by AI\n{'='*50}\nBased on: {env_name}\n\nCHANGES:\n{changelog}\n"
+                                            )
+
+                                        print(f"\n\033[92m✅ Saved: {new_env_name}\033[0m")
+                                        envs = list_environments()
+
+                                    elif save_choice == '2':
+                                        if input("Confirm overwrite? (yes/no): ").strip().lower() == 'yes':
+                                            env_file.write_text(improved_code)
+                                            print(f"\n\033[92m✅ Overwritten: {env_file}\033[0m")
+
+                                    elif save_choice == '3':
+                                        print("\n" + "=" * 60)
+                                        print(improved_code[:3000])
+                                        if len(improved_code) > 3000:
+                                            print(f"\n... ({len(improved_code) - 3000} more chars)")
+
+                except (ValueError, IndexError) as e:
+                    print(f"\033[91mInvalid selection: {e}\033[0m")
 
             input("\nPress Enter to continue...")
 
@@ -1594,50 +1669,6 @@ CHANGES MADE:
 
             except (ValueError, IndexError):
                 print("\033[91mInvalid selection.\033[0m")
-
-            input("\nPress Enter to continue...")
-
-        elif choice == '9':
-            # Autonomous agent mode
-            print("\n\033[95m" + "=" * 60 + "\033[0m")
-            print("\033[95m  AUTONOMOUS AGENT MODE\033[0m")
-            print("\033[95m" + "=" * 60 + "\033[0m")
-            print("\nTwo AI agents will work together:")
-            print("  \033[94mAgent 1 (Generator)\033[0m: Analyzes game, generates environment")
-            print("  \033[94mAgent 2 (Supervisor)\033[0m: Tests, analyzes, requests improvements")
-            print("\nThe agents will iterate until quality >= 7/10 or max 5 iterations.")
-
-            game_url = input("\nEnter game URL: ").strip()
-            if not game_url:
-                print("\033[91mNo URL provided.\033[0m")
-                input("\nPress Enter to continue...")
-                continue
-
-            hints = input("Any hints for the AI? (controls, objective, etc.) [optional]: ").strip()
-
-            print("\n\033[93mStarting agent orchestration...\033[0m\n")
-
-            try:
-                from uniwrap.agents import run_agents
-
-                result = run_agents(game_url, hints)
-
-                if result['success']:
-                    print(f"\n\033[92m✅ Agents completed successfully!\033[0m")
-                    print(f"   Environment: {result['env_name']}")
-                    print(f"   Quality Score: {result['quality_score']}/10")
-                    print(f"   Iterations: {result['iterations']}")
-
-                    # Refresh env list
-                    envs = list_environments()
-                    last_env = result['env_name']
-                else:
-                    print(f"\n\033[91m❌ Agent orchestration failed: {result.get('error', 'Unknown error')}\033[0m")
-
-            except Exception as e:
-                print(f"\n\033[91m❌ Error: {e}\033[0m")
-                import traceback
-                traceback.print_exc()
 
             input("\nPress Enter to continue...")
 
