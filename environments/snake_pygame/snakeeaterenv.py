@@ -1,9 +1,34 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+import os
+from typing import Optional
+
+# Import pygame._freetype BEFORE pygame to avoid circular import on Python 3.14
+try:
+    import pygame._freetype as freetype
+    FREETYPE_AVAILABLE = True
+except ImportError:
+    FREETYPE_AVAILABLE = False
+    freetype = None
+
 import pygame
 import random
-from typing import Optional
+
+# System font paths for freetype fallback
+SYSTEM_FONT_PATHS = [
+    '/System/Library/Fonts/Helvetica.ttc',  # macOS
+    '/System/Library/Fonts/Supplemental/Arial.ttf',  # macOS
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
+    'C:\\Windows\\Fonts\\arial.ttf',  # Windows
+]
+
+def get_system_font_path():
+    """Find an available system font file."""
+    for path in SYSTEM_FONT_PATHS:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 class SnakeEaterEnv(gym.Env):
@@ -256,15 +281,26 @@ class SnakeEaterEnv(gym.Env):
         # Draw food
         pygame.draw.rect(canvas, self.white, pygame.Rect(self.food_pos[0], self.food_pos[1], self.grid_size, self.grid_size))
 
-        # Draw score (skip if font module unavailable - Python 3.14 compatibility)
+        # Draw score (using freetype for Python 3.14 compatibility)
         if self.render_mode == "human":
             try:
-                font = pygame.font.SysFont('consolas', 20)
-                score_surface = font.render(f'Score : {self.score}', True, self.white)
-                score_rect = score_surface.get_rect()
-                score_rect.midtop = (self.frame_size_x / 10, 15)
-                canvas.blit(score_surface, score_rect)
-            except (NotImplementedError, ImportError):
+                if FREETYPE_AVAILABLE and freetype:
+                    font_path = get_system_font_path()
+                    if font_path:
+                        freetype.init()
+                        ft_font = freetype.Font(font_path, 20)
+                        score_surface, _ = ft_font.render(f'Score : {self.score}', pygame.Color('white'))
+                        score_rect = score_surface.get_rect()
+                        score_rect.midtop = (self.frame_size_x / 10, 15)
+                        canvas.blit(score_surface, score_rect)
+                else:
+                    # Fallback to pygame.font (may not work on Python 3.14)
+                    font = pygame.font.SysFont('consolas', 20)
+                    score_surface = font.render(f'Score : {self.score}', True, self.white)
+                    score_rect = score_surface.get_rect()
+                    score_rect.midtop = (self.frame_size_x / 10, 15)
+                    canvas.blit(score_surface, score_rect)
+            except Exception:
                 pass  # Font not available, skip score display
 
         if self.render_mode == "human":

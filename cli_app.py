@@ -537,20 +537,32 @@ def train_agent(env_name: str, timesteps: int = 10000, visual: bool = False, con
     print(f"Continue training: {continue_training}")
     print()
 
-    # Try to set up live plotting (may fail on some systems)
+    # Try to set up live plotting (may fail on some systems without GUI)
     live_plot_available = False
+    plt = None
     try:
         import matplotlib
-        # Try TkAgg first, fall back to other interactive backends
-        for backend in ['TkAgg', 'Qt5Agg', 'MacOSX', 'GTK3Agg']:
+        # Try interactive backends in order of preference
+        backend_set = False
+        for backend in ['MacOSX', 'TkAgg', 'Qt5Agg', 'GTK3Agg', 'Agg']:
             try:
-                matplotlib.use(backend)
+                matplotlib.use(backend, force=True)
+                backend_set = True
                 break
-            except:
+            except Exception:
                 continue
-        import matplotlib.pyplot as plt
-        import numpy as np
-        live_plot_available = True
+
+        if backend_set:
+            import matplotlib.pyplot as plt
+            # Test if we can actually create a figure
+            try:
+                test_fig = plt.figure()
+                plt.close(test_fig)
+                import numpy as np
+                live_plot_available = True
+            except Exception:
+                plt = None
+                live_plot_available = False
     except Exception as e:
         print(f"   Note: Live plotting unavailable ({e})")
         plt = None
