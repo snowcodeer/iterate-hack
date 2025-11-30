@@ -1,0 +1,12 @@
+functorial_com_v3 - Improved by AI Supervisor
+==================================================
+
+Based on: functorial_com_v2
+
+CHANGES MADE:
+- [ACTION SPACE] Changed to hold-based control: action 0 = no hold, action 1 = hold space (matches game mechanic)
+- [GAME OVER] Fixed premature termination: reset identical_frame_count during grace period, increased threshold to 60 frames, raised diff threshold to 5.0
+- [OBSERVATION] Reduced to 200x125 grayscale for 64x faster processing (from 1.2M to 25K values)
+- [REWARDS] Time-based survival rewards that increase with difficulty (0.01 + time/5000), normalized to [-1, +1] range
+- [STATE EXTRACTION] Added JavaScript-based game state extraction for reliable score/gameOver detection
+- [DEBUG] Added logging every 50 steps to monitor frame differences, scores, and termination triggers

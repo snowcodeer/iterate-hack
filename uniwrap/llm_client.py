@@ -38,33 +38,35 @@ class ClaudeClient:
         self.client = Anthropic(api_key=api_key)
     
     def call_claude(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         model: str = "claude-3-5-sonnet-20241022",
         max_retries: int = 3,
-        retry_delay: float = 1.0
+        retry_delay: float = 1.0,
+        max_tokens: int = 8192
     ) -> str:
         """Call Claude API with retry logic.
-        
+
         Args:
             prompt: The prompt to send to Claude
             model: Claude model to use
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
-            
+            max_tokens: Maximum tokens in response (default 8192 for code generation)
+
         Returns:
             Raw text response from Claude
-            
+
         Raises:
             Exception: If all retry attempts fail
         """
         last_error = None
-        
+
         for attempt in range(max_retries):
             try:
                 response = self.client.messages.create(
                     model=model,
-                    max_tokens=4096,
+                    max_tokens=max_tokens,
                     messages=[
                         {"role": "user", "content": prompt}
                     ]

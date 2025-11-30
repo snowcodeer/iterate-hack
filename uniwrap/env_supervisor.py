@@ -245,32 +245,66 @@ If the analysis mentions short episodes or premature termination, fix _is_game_o
        pass
    ```
 
+### SURVIVAL TIME REWARDS (CRITICAL FOR DODGE/SURVIVE GAMES):
+If this is a dodging/survival game, the reward MUST be time-based:
+```python
+def step(self, action):
+    self.time_alive += 1
+    # ... execute action ...
+    reward = 0.0
+    # SURVIVAL REWARD - increases over time
+    survival_reward = 0.01 + (self.time_alive / 5000)
+    reward += survival_reward
+    # Death penalty
+    if terminated:
+        reward = -1.0
+    return observation, reward, terminated, truncated, info
+```
+
 ### IMPORTANT RULES:
 - Keep the same class name and overall structure
 - Don't change the observation space or action space unless necessary
 - Add comments explaining reward logic and game over detection
 - Make rewards scale between -1.0 and +1.0 approximately
+- For survival games, reward MUST increase with survival time
 
 ## OUTPUT FORMAT
 Output your response in TWO sections:
 
-1. First, a brief CHANGELOG section listing what you changed and why (3-10 bullet points)
-2. Then the complete improved Python code
+1. First, a BRIEF CHANGELOG (5-8 bullet points MAX - be concise!)
+2. Then the COMPLETE Python code
+
+CRITICAL OUTPUT REQUIREMENTS:
+- Keep changelog SHORT (5-8 bullets max) to save tokens for code
+- Code MUST include ALL methods with COMPLETE implementations
+- The step() method MUST end with: return observation, reward, terminated, truncated, info
+- MUST include render() and close() methods at the end
+- DO NOT stop mid-function - complete every method fully
+
+REQUIRED METHODS (in order):
+1. __init__ - initialize all variables
+2. _start_browser - launch playwright
+3. _get_canvas_screenshot - capture game frame
+4. _extract_game_state - JavaScript state extraction
+5. _is_game_over - detect game end
+6. _get_score - extract score
+7. reset - reset environment, return (observation, info_dict)
+8. step - execute action, return (observation, reward, terminated, truncated, info)
+9. render - return self.current_frame or None
+10. close - cleanup browser resources
 
 Format:
 ```
 === CHANGELOG ===
-- [REWARD] Added intermediate reward for X because Y
-- [GAME_OVER] Increased frame threshold from 8 to 30 to prevent false positives
-- [GAME_OVER] Added grace period to skip checks during first 30 steps
-- [FIX] Removed unreliable red pixel detection
-...
+- [CATEGORY] Brief change description
+(5-8 items max)
 
 === CODE ===
-<complete python code here>
+import gymnasium as gym
+... (complete code through close() method)
 ```
 
-Be specific about what you changed and why. The user wants to understand your improvements."""
+FINAL CHECK: Your code MUST end with the close() method."""
 
 
 def analyze_environment(

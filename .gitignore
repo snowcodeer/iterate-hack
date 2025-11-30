@@ -23,3 +23,7 @@ ENV/
 env_specs.json
 test_output.json
 *.log
+
+# Models (too large for git)
+models/
+*.zip
