@@ -1260,10 +1260,24 @@ def main():
                                 (new_env_path / '__init__.py').write_text(
                                     init_content.replace(env_name, new_env_name)
                                 )
-                                # Note: top-level __init__.py uses auto-discovery, no update needed
+
+                                # Write changelog as txt file
+                                if changelog:
+                                    changelog_file = new_env_path / "CHANGELOG.txt"
+                                    changelog_content = f"""{new_env_name} - Improved by AI Supervisor
+{'=' * 50}
+
+Based on: {env_name}
+
+CHANGES MADE:
+{changelog}
+"""
+                                    changelog_file.write_text(changelog_content)
 
                                 print(f"\n\033[92m✅ Saved as: {new_env_name}\033[0m")
                                 print(f"   Path: {new_env_path}")
+                                if changelog:
+                                    print(f"   Changelog: {new_env_path}/CHANGELOG.txt")
 
                             elif save_choice == '2':
                                 # Overwrite

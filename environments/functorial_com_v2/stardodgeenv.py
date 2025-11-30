@@ -1,26 +1,3 @@
-"""
-StarDodgeEnv v2 - Improved by AI Supervisor
-==========================================
-
-Based on: functorial_com/stardodgeenv.py
-
-CHANGES MADE:
-- [GAME_OVER] Added 30-step grace period at start to prevent false positives during loading
-- [GAME_OVER] Increased identical frame threshold from 8 to 30 (~1 second) for more reliable detection
-- [GAME_OVER] Removed unreliable red pixel color detection that caused false positives
-- [GAME_OVER] Added text/DOM-based game over detection (checks for 'game over', 'try again', etc.)
-- [REWARD] Added base survival reward (+0.01 per step) to encourage staying alive
-- [REWARD] Added score increase reward (+0.5 per point) for successful dodges
-- [REWARD] Added milestone bonus (+0.1 every 100 steps) for intermediate goals
-- [REWARD] Death penalty (-1.0) creates clear distinction between success and failure
-- [FIX] Improved frame comparison using mean absolute difference instead of hash
-
-ISSUES FIXED:
-- Episodes were ending prematurely (avg < 30 steps) due to aggressive game over detection
-- Reward function was flat (+0.02 per step regardless of action) - no learning signal
-- Red pixel detection was triggering on game UI elements
-"""
-
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
