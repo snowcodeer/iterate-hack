@@ -1,11 +1,66 @@
 """Environment spec generation using Claude LLM."""
 
 import json
+import ast
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 from uniwrap.llm_client import ClaudeClient
 from uniwrap.utils import clean_json_response
+
+
+def validate_python_code(code: str) -> Tuple[bool, Optional[str]]:
+    """Validate Python code for syntax errors.
+
+    Args:
+        code: Python source code to validate
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        ast.parse(code)
+        return True, None
+    except SyntaxError as e:
+        return False, f"Syntax error at line {e.lineno}: {e.msg}"
+
+
+def fix_common_code_issues(code: str) -> str:
+    """Attempt to fix common code generation issues.
+
+    Args:
+        code: Python source code
+
+    Returns:
+        Fixed code
+    """
+    import re
+
+    # Fix missing self. prefix for common instance variables
+    # Pattern: self.X = ... Y ... where Y is an uppercase variable without self.
+    # This catches cases like: self.GAME_RES = (self.W * TILE, ...) -> self.TILE
+
+    # Find all self.VARNAME definitions
+    defined_vars = set(re.findall(r'self\.([A-Z_]+)\s*=', code))
+
+    # For each defined var, check if it's used without self. prefix
+    for var in defined_vars:
+        # Pattern: not preceded by 'self.' but the variable name appears
+        # Look for the variable used without self. (but not in string literals)
+        pattern = rf'(?<!self\.)(?<!["\'])(?<![a-zA-Z_])({var})(?![a-zA-Z_])'
+
+        # Check if the variable is used without self. in assignments
+        matches = list(re.finditer(pattern, code))
+        for match in matches:
+            # Skip if this is the definition itself or in a string
+            pos = match.start()
+            # Check if we're inside a string by counting quotes
+            before = code[:pos]
+            if before.count('"') % 2 == 0 and before.count("'") % 2 == 0:
+                # Not in a string, replace with self.VAR
+                code = code[:pos] + 'self.' + code[pos:]
+
+    return code
 
 
 PROMPT_TEMPLATE = """You are an expert in reinforcement learning environment design.
@@ -422,6 +477,31 @@ def render(self):
 
 NEVER let font errors crash the environment. The game should still be playable without text.
 
+=== CRITICAL: CODE CORRECTNESS RULES ===
+
+Your generated code MUST be syntactically correct and runnable. Common mistakes to AVOID:
+
+1. ALWAYS use `self.` prefix for instance variables:
+   - WRONG: `self.GAME_RES = (self.W * TILE, self.H * TILE)`
+   - RIGHT: `self.GAME_RES = (self.W * self.TILE, self.H * self.TILE)`
+
+2. Define variables BEFORE using them:
+   - WRONG: Using `self.field` before it's assigned in __init__
+   - RIGHT: Initialize all instance variables at the start of __init__
+
+3. All methods must have `self` as first parameter:
+   - WRONG: `def _check_collision():`
+   - RIGHT: `def _check_collision(self):`
+
+4. Import all modules you use:
+   - If using `deepcopy`, add `from copy import deepcopy`
+   - If using `randrange`, add `from random import randrange`
+
+5. Consistent variable naming - don't mix styles:
+   - Pick either `game_over` or `gameOver`, not both
+
+BEFORE outputting code, mentally trace through __init__ and verify every variable reference is valid.
+
 Output a complete Python file with:
 1. All necessary imports
 2. A gym.Env subclass with __init__, reset, step, render, close methods
@@ -429,6 +509,7 @@ Output a complete Python file with:
 4. Proper observation and action spaces
 5. Reward calculation based on game events
 6. ROBUST FONT HANDLING with try/except (see above)
+7. ALL instance variables use `self.` prefix consistently
 
 The class name should be the game name in snake_case (e.g., snake_game -> SnakeGameEnv).
 
@@ -592,7 +673,17 @@ def generate_pygame_env_code(
     if code.endswith("```"):
         code = code[:-3]
 
-    return code.strip()
+    code = code.strip()
+
+    # Validate and fix common issues
+    code = fix_common_code_issues(code)
+
+    is_valid, error = validate_python_code(code)
+    if not is_valid:
+        print(f"   ⚠️  Generated code has syntax error: {error}")
+        print("   Attempting to continue anyway...")
+
+    return code
 
 
 def generate_web_game_env_code(
@@ -645,5 +736,15 @@ IMPORTANT: Pay close attention to the user's hints above. They have tested this 
     if code.endswith("```"):
         code = code[:-3]
 
-    return code.strip()
+    code = code.strip()
+
+    # Validate and fix common issues
+    code = fix_common_code_issues(code)
+
+    is_valid, error = validate_python_code(code)
+    if not is_valid:
+        print(f"   ⚠️  Generated code has syntax error: {error}")
+        print("   Attempting to continue anyway...")
+
+    return code
 
