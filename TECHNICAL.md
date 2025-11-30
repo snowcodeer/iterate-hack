@@ -72,14 +72,6 @@ def fix_common_code_issues(code: str) -> str:
         # Replace with self.VAR if not already prefixed
 ```
 
-**Prompt Engineering for Code Correctness:**
-The prompts include explicit rules to prevent common bugs:
-- Always use `self.` prefix for instance variables
-- Define variables before using them
-- All methods must have `self` as first parameter
-- Import all modules used
-- Consistent variable naming
-
 ### 2. RL Agent (`uniwrap/rl_agent.py`)
 
 Trains PPO agents using Stable Baselines3.
@@ -102,23 +94,89 @@ else:
 - Entropy coefficient: 0.01
 
 **Outputs:**
-- Model: `models/<env_name>_ppo.zip`
+- Model: `models/<env_name>_ppo.zip` (or `_v2.zip`, `_v3.zip`, etc.)
 - Metadata: `models/<env_name>_ppo.json`
-- Training graphs: `training_graphs/<env_name>_training_*.png`
+- Live graph: `training_graphs/<env_name>_live_*.png`
+- Detailed graph: `training_graphs/<env_name>_training_*.png`
 
 **Live Training Visualization:**
 During training, a matplotlib window opens showing real-time progress:
 - Episode rewards with moving average (10 episodes)
 - Episode lengths (survival time)
 - Auto-scaling axes as training progresses
-- Graph is saved as `training_graphs/<env_name>_live_*.png` when training completes
+- Graph is saved when training completes
 
-### 3. AI Supervisor (`uniwrap/env_supervisor.py`)
+```python
+# Set up live plotting
+plt.ion()  # Enable interactive mode
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+# Update after each episode
+def progress(data):
+    if data['type'] == 'episode_complete':
+        episode_rewards_live.append(data['reward'])
+        reward_line.set_data(episodes, episode_rewards_live)
+        fig.canvas.draw_idle()
+        fig.canvas.flush_events()
+```
+
+### 3. Model Version Management
+
+Models are automatically versioned to preserve training history.
+
+**Version Naming:**
+```
+models/
+├── snake_pygame_ppo.zip      # v1 (original)
+├── snake_pygame_ppo.json     # v1 metadata
+├── snake_pygame_ppo_v2.zip   # v2 (continued or fresh)
+├── snake_pygame_ppo_v2.json  # v2 metadata
+├── snake_pygame_ppo_v3.zip   # v3
+└── snake_pygame_ppo_v3.json  # v3 metadata
+```
+
+**Metadata Contents:**
+```json
+{
+  "env_name": "snake_pygame",
+  "env_file_hash": "a1b2c3d4e5f6",
+  "observation_shape": [20, 10],
+  "action_space_n": 4,
+  "total_timesteps": 25000,
+  "continued_from": "models/snake_pygame_ppo.zip",
+  "trained_at": "2025-11-30T14:30:00",
+  "model_file": "snake_pygame_ppo_v2.zip"
+}
+```
+
+**Training Modes:**
+1. **Start Fresh**: Creates new version with random weights
+   ```python
+   save_path = get_versioned_model_path(env_name)  # Returns next available version
+   ```
+
+2. **Continue Training**: Loads latest weights, saves as new version
+   ```python
+   existing_model = get_latest_model_path(env_name)
+   agent.load(existing_model)
+   save_path = get_versioned_model_path(env_name)  # New version
+   ```
+
+**Version Selection (Testing):**
+```python
+versions = list_model_versions(env_name)
+# Returns: [
+#   {"version": 1, "path": Path(...), "size_kb": 245, "metadata": {...}},
+#   {"version": 2, "path": Path(...), "size_kb": 312, "metadata": {...}},
+# ]
+```
+
+### 4. AI Supervisor (`uniwrap/env_supervisor.py`)
 
 Analyzes and improves environments automatically.
 
 **Analysis Pipeline:**
-1. Run quick training (5000 steps, ~34 episodes)
+1. Run quick training (1000 steps, ~10-30 episodes)
 2. Collect metrics (rewards, episode lengths, variance)
 3. Fetch game info from URL to understand mechanics
 4. Send to Claude for analysis
@@ -137,7 +195,7 @@ Analyzes and improves environments automatically.
 - `[OBSERVATION]`: Fix observation extraction
 - `[PERFORMANCE]`: Reduce observation size, optimize
 
-### 4. LLM Client (`uniwrap/llm_client.py`)
+### 5. LLM Client (`uniwrap/llm_client.py`)
 
 Claude API wrapper with retry logic.
 
@@ -265,9 +323,9 @@ Pygame environments embed game logic directly rather than controlling an externa
 - `"rgb_array"`: Returns numpy array via `pygame.surfarray.pixels3d()`
 - `None`: Headless mode for training (no rendering)
 
-## Versioning System
+## Environment Versioning
 
-Environments are versioned when improved:
+Environments are versioned when improved by the AI supervisor:
 
 ```
 environments/
@@ -289,25 +347,31 @@ CHANGES MADE:
 - [OBSERVATION] Reduced to grayscale for faster training
 ```
 
-## Training Pipeline
+## Complete Training Pipeline
 
 ```
 1. Generate Environment
    └─> environments/<name>/<name>env.py
 
-2. Train Agent
-   └─> models/<name>_ppo.zip
+2. Train Agent (with live graph)
+   └─> models/<name>_ppo.zip (v1)
+   └─> models/<name>_ppo.json (metadata)
+   └─> training_graphs/<name>_live_*.png
    └─> training_graphs/<name>_training_*.png
 
-3. Evaluate (optional)
-   └─> Check rewards, episode lengths
+3. Continue Training (optional)
+   └─> Loads v1 weights
+   └─> models/<name>_ppo_v2.zip (v2)
+   └─> Metadata tracks: continued_from: v1
 
 4. AI Supervisor (if needed)
    └─> Analyze training results
    └─> Generate improved environment
    └─> environments/<name>_v2/
 
-5. Repeat training on improved environment
+5. Test Specific Version
+   └─> Select model v1, v2, or v3
+   └─> Run episodes with selected weights
 ```
 
 ## Configuration
@@ -326,7 +390,7 @@ See `requirements.txt`:
 - `playwright>=1.40.0` - Browser automation
 - `pygame>=2.5.0` - Game rendering
 - `anthropic>=0.34.0` - Claude API
-- `matplotlib>=3.5.0` - Training graphs
+- `matplotlib>=3.5.0` - Live training graphs
 
 ## Performance Considerations
 
@@ -349,3 +413,17 @@ Short episodes indicate problems:
 - < 30 steps: Premature game over detection
 - 30-50 steps: Check grace period
 - 100+ steps: Healthy training
+
+## Troubleshooting
+
+### Model-Environment Mismatch
+Each model stores `observation_shape` in metadata. If you modify an environment's observation space, you need to train a new model - the old one won't work.
+
+### Flat Rewards
+The AI supervisor detects this by checking reward variance. If all episodes have identical rewards, it indicates:
+- Game never actually started
+- Reward function returns constant value
+- Score extraction not working
+
+### Matplotlib Backend Issues
+The live graph tries multiple backends in order: TkAgg, Qt5Agg, MacOSX, GTK3Agg. If none work, training continues without live visualization.
