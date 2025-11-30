@@ -391,12 +391,44 @@ IMPORTANT REQUIREMENTS:
 - Handle game reset properly
 - Support both headless (training) and visual (human) render modes
 
+=== CRITICAL: PYGAME FONT HANDLING ===
+
+Python 3.14+ has compatibility issues with pygame.font that cause circular import errors.
+You MUST wrap ALL font operations in try/except blocks:
+
+```python
+# In render() method - ALWAYS use this pattern for fonts:
+def render(self):
+    if self.render_mode != "human" or self.screen is None:
+        return None
+
+    # Draw game elements first (before any font operations)
+    self.screen.fill((0, 0, 0))
+    # ... draw game objects ...
+
+    # Font rendering with robust error handling
+    try:
+        font = pygame.font.Font(None, 36)
+        # render text...
+    except Exception:
+        try:
+            font = pygame.font.SysFont('arial', 36)
+            # render text...
+        except Exception:
+            pass  # Skip text rendering if fonts unavailable
+
+    pygame.display.flip()
+```
+
+NEVER let font errors crash the environment. The game should still be playable without text.
+
 Output a complete Python file with:
 1. All necessary imports
 2. A gym.Env subclass with __init__, reset, step, render, close methods
 3. Embedded game logic (adapted from the original code)
 4. Proper observation and action spaces
 5. Reward calculation based on game events
+6. ROBUST FONT HANDLING with try/except (see above)
 
 The class name should be the game name in snake_case (e.g., snake_game -> SnakeGameEnv).
 

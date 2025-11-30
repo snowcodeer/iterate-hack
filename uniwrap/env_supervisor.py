@@ -261,12 +261,29 @@ def step(self, action):
     return observation, reward, terminated, truncated, info
 ```
 
+### PYGAME FONT HANDLING (CRITICAL FOR PYGAME ENVIRONMENTS):
+Python 3.14+ has compatibility issues with pygame.font. ALWAYS wrap font operations:
+```python
+# In render() - ALWAYS use this pattern:
+try:
+    font = pygame.font.Font(None, 36)
+    # render text...
+except Exception:
+    try:
+        font = pygame.font.SysFont('arial', 36)
+        # render text...
+    except Exception:
+        pass  # Skip text if fonts unavailable - game still works
+```
+NEVER let font errors crash the environment.
+
 ### IMPORTANT RULES:
 - Keep the same class name and overall structure
 - Don't change the observation space or action space unless necessary
 - Add comments explaining reward logic and game over detection
 - Make rewards scale between -1.0 and +1.0 approximately
 - For survival games, reward MUST increase with survival time
+- ALWAYS wrap pygame font operations in try/except blocks
 
 ## OUTPUT FORMAT
 Output your response in TWO sections:

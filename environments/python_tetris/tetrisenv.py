@@ -290,16 +290,22 @@ class TetrisEnv(gym.Env):
         # Blit game canvas to main canvas
         canvas.blit(game_canvas, (20, 20))
         
-        # Draw text
+        # Draw text with robust font handling (Python 3.14+ compatibility)
         try:
             font = pygame.font.Font(None, 36)
-        except:
-            font = pygame.font.SysFont('arial', 36)
-        
-        score_text = font.render(f'Score: {self.score}', True, (255, 255, 255))
-        lines_text = font.render(f'Lines: {self.total_lines_cleared}', True, (255, 255, 255))
-        canvas.blit(score_text, (500, 400))
-        canvas.blit(lines_text, (500, 450))
+            score_text = font.render(f'Score: {self.score}', True, (255, 255, 255))
+            lines_text = font.render(f'Lines: {self.total_lines_cleared}', True, (255, 255, 255))
+            canvas.blit(score_text, (500, 400))
+            canvas.blit(lines_text, (500, 450))
+        except Exception:
+            try:
+                font = pygame.font.SysFont('arial', 36)
+                score_text = font.render(f'Score: {self.score}', True, (255, 255, 255))
+                lines_text = font.render(f'Lines: {self.total_lines_cleared}', True, (255, 255, 255))
+                canvas.blit(score_text, (500, 400))
+                canvas.blit(lines_text, (500, 450))
+            except Exception:
+                pass  # Skip text rendering if fonts unavailable
         
         if self.render_mode == "human":
             self.screen.blit(canvas, (0, 0))
